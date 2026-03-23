@@ -5052,7 +5052,9 @@ ${role === 'agent'
     if (!element || !container) return false;
     const elementRect = element.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
-    return elementRect.top < containerRect.bottom && elementRect.bottom > containerRect.bottom;
+    // Trigger when element extends past the container bottom — whether
+    // partially clipped or completely off-screen.
+    return elementRect.bottom > containerRect.bottom;
   }
 
   function getElementBottomAfterScroll(element, container, scrollTop) {
@@ -5131,13 +5133,13 @@ ${role === 'agent'
       `;
       card.addEventListener('click', (e) => {
         if (e.target.closest('.ai-setup-customer-edit')) return;
-        selectCustomerCard(c.id, { autoScrollElement: card });
+        selectCustomerCard(c.id);
         window.sendEvent('Onboarding — selected company: ' + c.company);
       });
       card.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          selectCustomerCard(c.id, { autoScrollElement: card });
+          selectCustomerCard(c.id);
         }
       });
       card.querySelector('.ai-setup-customer-edit').addEventListener('click', (e) => {
@@ -5165,24 +5167,26 @@ ${role === 'agent'
     autoSelectPrevious(customers);
   }
 
-  function selectCustomerCard(customerId, options = {}) {
-    const { autoScrollElement = null } = options;
+  function selectCustomerCard(customerId) {
     _selectedCustomerId = customerId;
     document.querySelectorAll('.ai-setup-customer-card').forEach(card => {
       card.classList.toggle('selected', card.dataset.customerId === customerId);
     });
     updateContinueButton();
-    if (autoScrollElement) maybeAutoScrollMetaStartBottom(autoScrollElement);
+    // Scroll to reveal the role section (next step) rather than the clicked card
+    const roleGrid = document.querySelector('.ai-setup-role-grid');
+    if (roleGrid) maybeAutoScrollMetaStartBottom(roleGrid);
   }
 
-  function selectRoleCard(role, options = {}) {
-    const { autoScrollElement = null } = options;
+  function selectRoleCard(role) {
     _selectedRole = role;
     document.querySelectorAll('.ai-setup-role-card').forEach(card => {
       card.classList.toggle('selected', card.dataset.role === role);
     });
     updateContinueButton();
-    if (autoScrollElement) maybeAutoScrollMetaStartBottom(autoScrollElement);
+    // Scroll to reveal the footer/continue button
+    const footer = document.querySelector('.ai-setup-meta-footer');
+    if (footer) maybeAutoScrollMetaStartBottom(footer);
   }
 
   function updateContinueButton() {
@@ -5285,7 +5289,7 @@ ${role === 'agent'
   function initRoleSelection() {
     document.querySelectorAll('.ai-setup-role-card').forEach(card => {
       card.onclick = () => {
-        selectRoleCard(card.dataset.role, { autoScrollElement: card });
+        selectRoleCard(card.dataset.role);
         window.sendEvent('Onboarding — selected role: ' + card.dataset.role);
       };
     });

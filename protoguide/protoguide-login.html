@@ -7,7 +7,7 @@
   <link rel="icon" href="data:,">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="protoguide-login.css">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -15,10 +15,12 @@
   <div class="login-container">
     <!-- Sign in card -->
     <div class="login-card" id="login-card">
-      <div class="login-title">
-        <span class="title-proto">Proto</span><span class="title-guide">Guide</span>
+      <div class="login-brand">
+        <h1 class="login-title">
+          <span class="title-proto">Proto</span><span class="title-guide">Guide</span>
+        </h1>
+        <p class="login-subtitle">Your prototype companion</p>
       </div>
-      <p class="login-subtitle">Sign in to access the analytics prototype</p>
       <div id="g_id_onload"
            data-client_id="19505891256-gd7j4nslejcpoq718mouud1iit1lp3s9.apps.googleusercontent.com"
            data-callback="handleProtoGuideSignIn"
@@ -39,8 +41,10 @@
 
     <!-- Access denied card -->
     <div class="login-card" id="denied-card" style="display:none;">
-      <div class="login-title">
-        <span class="title-proto">Proto</span><span class="title-guide">Guide</span>
+      <div class="login-brand">
+        <h1 class="login-title">
+          <span class="title-proto">Proto</span><span class="title-guide">Guide</span>
+        </h1>
       </div>
       <p class="denied-email" id="denied-email"></p>
       <p class="denied-message">You don't have access to ProtoGuide. Contact an administrator to be added.</p>

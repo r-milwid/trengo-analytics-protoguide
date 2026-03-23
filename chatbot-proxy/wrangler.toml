@@ -1,0 +1,15 @@
+name = "trengo-chatbot-proxy"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "DASHBOARD_CONFIG"
+id = "423fe18d5b34407db60c162229bc336c"
+
+[[kv_namespaces]]
+binding = "CUSTOMER_PROFILES"
+id = "0c1e49948295435fac162f47ec0e6ec4"
+
+[[kv_namespaces]]
+binding = "PROTOGUIDE_AUTH"
+id = "REPLACE_WITH_ACTUAL_KV_ID"

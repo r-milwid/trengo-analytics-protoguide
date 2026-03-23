@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ProtoGuide — Sign In</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="protoguide-login.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <div class="login-container">
+    <!-- Sign in card -->
+    <div class="login-card" id="login-card">
+      <div class="login-title">
+        <span class="title-proto">Proto</span><span class="title-guide">Guide</span>
+      </div>
+      <p class="login-subtitle">Sign in to access the analytics prototype</p>
+      <div id="g_id_onload"
+           data-client_id="GOOGLE_CLIENT_ID_PLACEHOLDER"
+           data-callback="handleProtoGuideSignIn"
+           data-auto_prompt="false">
+      </div>
+      <div class="g_id_signin"
+           data-type="standard"
+           data-size="large"
+           data-theme="outline"
+           data-text="sign_in_with"
+           data-shape="rectangular"
+           data-width="300">
+      </div>
+      <div class="login-loading" id="login-loading" style="display:none;">
+        <p>Verifying access...</p>
+      </div>
+    </div>
+
+    <!-- Access denied card -->
+    <div class="login-card" id="denied-card" style="display:none;">
+      <div class="login-title">
+        <span class="title-proto">Proto</span><span class="title-guide">Guide</span>
+      </div>
+      <p class="denied-email" id="denied-email"></p>
+      <p class="denied-message">You don't have access to ProtoGuide. Contact an administrator to be added.</p>
+      <button class="login-retry-btn" onclick="location.reload()">Try a different account</button>
+    </div>
+  </div>
+
+  <script>
+    var CHATBOT_PROXY = 'https://trengo-chatbot-proxy.prototype-companion.workers.dev';
+
+    // Check if already logged in
+    (function() {
+      var cached = localStorage.getItem('protoguide_user');
+      if (cached) {
+        window.location.href = 'protoguide.html';
+      }
+    })();
+
+    function handleProtoGuideSignIn(response) {
+      document.getElementById('login-loading').style.display = '';
+
+      var payload;
+      try {
+        payload = JSON.parse(atob(response.credential.split('.')[1]));
+      } catch (e) {
+        alert('Failed to decode sign-in token.');
+        return;
+      }
+
+      var email = payload.email;
+
+      fetch(CHATBOT_PROXY + '/protoguide/auth/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email, idToken: response.credential })
+      }).then(function(r) {
+        if (r.ok) return r.json();
+        throw new Error('unauthorized');
+      }).then(function(data) {
+        localStorage.setItem('protoguide_user', JSON.stringify({ email: email, role: data.role }));
+        localStorage.setItem('protoguide_token', response.credential);
+        window.location.href = 'protoguide.html';
+      }).catch(function() {
+        document.getElementById('login-card').style.display = 'none';
+        document.getElementById('denied-card').style.display = '';
+        document.getElementById('denied-email').textContent = email;
+      });
+    }
+  </script>
+</body>
+</html>

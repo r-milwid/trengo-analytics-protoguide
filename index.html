@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trengo Analytics</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- LEFT SIDEBAR NAV -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <ul class="sidebar-nav">
+        <!-- Inbox -->
+        <li class="nav-item" data-nav="inbox">
+          <div class="nav-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>
+              <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
+            </svg>
+          </div>
+          <span class="nav-tooltip">Inbox</span>
+        </li>
+        <!-- Pipeline -->
+        <li class="nav-item" data-nav="pipeline">
+          <div class="nav-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="4.5" height="18" rx="1.5"/>
+              <rect x="9.75" y="3" width="4.5" height="18" rx="1.5"/>
+              <rect x="16.5" y="3" width="4.5" height="18" rx="1.5"/>
+            </svg>
+          </div>
+          <span class="nav-tooltip">Pipeline</span>
+        </li>
+        <!-- AI & Automation -->
+        <li class="nav-item" data-nav="ai-automation">
+          <div class="nav-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"/>
+              <path d="M20 2v4"/><path d="M22 4h-4"/>
+            </svg>
+          </div>
+          <span class="nav-tooltip">AI &amp; Automation</span>
+        </li>
+        <!-- Analytics (pie chart icon — active) -->
+        <li class="nav-item active" data-nav="analytics" id="nav-analytics">
+          <div class="nav-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
+              <path d="M22 12A10 10 0 0 0 12 2v10z"/>
+            </svg>
+          </div>
+          <span class="nav-tooltip">Analytics</span>
+        </li>
+        <!-- Broadcast -->
+        <li class="nav-item" data-nav="broadcast">
+          <div class="nav-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/>
+              <path d="M6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14"/>
+              <path d="M8 6v8"/>
+            </svg>
+          </div>
+          <span class="nav-tooltip">Broadcast</span>
+        </li>
+        <!-- Settings -->
+        <li class="nav-item" data-nav="settings" id="settings-nav" data-disabled="true" style="cursor:default;">
+          <div class="nav-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </div>
+          <span class="nav-tooltip">Settings</span>
+        </li>
+      </ul>
+    </div>
+    <div class="sidebar-bottom">
+      <div class="sidebar-bottom-icons">
+        <div class="sidebar-bottom-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z"/></svg>
+          <span class="nav-tooltip">Voice</span>
+        </div>
+        <div class="sidebar-bottom-icon" title="Support">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span class="nav-tooltip">Support</span>
+        </div>
+        <div class="sidebar-bottom-icon" id="super-admin-nav" data-enabled="false" title="Notifications">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+          <span class="nav-tooltip">Notifications</span>
+        </div>
+      </div>
+      <button class="sidebar-user-avatar" id="user-flag-btn"
+              aria-label="Profile" title="Profile"
+              data-enabled="false" type="button">R
+        <span class="nav-tooltip">Profile</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- MAIN CONTENT AREA -->
+  <main class="main-content" id="main-content">
+    <div class="prototype-shell" id="prototype-shell">
+      <!-- Landing state (non-analytics) -->
+      <div class="landing-state" id="landing-state">
+        <div class="landing-inner">
+          <h1>Welcome to Trengo</h1>
+          <p>Click <strong>Analytics</strong> in the sidebar to view reporting.</p>
+        </div>
+      </div>
+
+      <!-- Analytics page -->
+      <div class="analytics-page" id="analytics-page" style="display:none;">
+        <!-- Page header -->
+        <div class="analytics-header" id="analytics-header">
+          <div class="analytics-header-top">
+            <h1>Analytics</h1>
+            <div class="header-controls">
+              <div class="sub-nav-actions" id="sub-nav-actions">
+                <!-- Manage widgets -->
+                <button class="sub-nav-action-btn" id="manage-widgets-btn">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="4.5" height="4.5" rx=".8"/><rect x="1" y="8.5" width="4.5" height="4.5" rx=".8"/><rect x="8.5" y="8.5" width="4.5" height="4.5" rx=".8"/><line x1="11" y1="1.2" x2="11" y2="4.8"/><line x1="9.2" y1="3" x2="12.8" y2="3"/></svg>
+                  <span>Manage widgets</span>
+                </button>
+                <!-- Team display settings -->
+                <button class="sub-nav-action-btn" id="team-display-settings-btn" title="Display settings" style="display:none;">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="2" y1="4" x2="14" y2="4"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="12" x2="14" y2="12"/>
+                    <circle cx="5" cy="4" r="1.5" fill="var(--white)" stroke="currentColor"/>
+                    <circle cx="10" cy="8" r="1.5" fill="var(--white)" stroke="currentColor"/>
+                    <circle cx="6" cy="12" r="1.5" fill="var(--white)" stroke="currentColor"/>
+                  </svg>
+                </button>
+                <!-- View/Edit toggle button -->
+                <button class="sub-nav-action-btn" id="viewedit-toggle-btn" title="Switch to View mode">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M1 8s3-5.5 7-5.5S15 8 15 8s-3 5.5-7 5.5S1 8 1 8z"/>
+                    <circle cx="8" cy="8" r="2.5"/>
+                  </svg>
+                  <span>View</span>
+                </button>
+              </div>
+            </div>
+          </div>
+          <!-- Sticky sub-nav -->
+          <div class="sub-nav" id="sub-nav">
+            <div class="sub-nav-tabs" id="sub-nav-tabs">
+              <!-- Rendered dynamically by renderTabs() -->
+            </div>
+            <div class="filter-bar">
+              <div class="filter-chip" id="filter-date">
+                <span>Last 30 days</span>
+                <svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 5l3 3 3-3" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+              </div>
+              <div class="filter-chip" id="filter-channel">
+                <span>All channels</span>
+                <svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 5l3 3 3-3" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+              </div>
+              <div class="filter-chip" id="filter-team">
+                <span>All teams</span>
+                <svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 5l3 3 3-3" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Scrollable sections — rendered dynamically by renderSections() -->
+        <div class="analytics-sections" id="analytics-sections"></div>
+      </div>
+
+      <!-- AI Setup Onboarding (covers analytics content area, not sidebar) -->
+      <div class="ai-setup-overlay" id="ai-setup-overlay" style="display:none;">
+
+      <!-- State 1: Meta-start (customer + role selection) -->
+      <div class="ai-setup-meta" id="ai-setup-meta">
+        <div class="ai-setup-meta-card ai-setup-meta-card--testing">
+          <!-- Disclaimer banner -->
+          <div class="ai-setup-testing-disclaimer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            <span>Prototype setup — for internal testing only. In the real product, users would not see this.</span>
+          </div>
+
+          <!-- Header -->
+          <h2>Pick your test identity</h2>
+          <p class="ai-setup-meta-subtitle">Choose a company and role to test the analytics experience from that perspective.</p>
+
+          <!-- Company section -->
+          <div class="ai-setup-section">
+            <h3 class="ai-setup-section-label">Company</h3>
+            <div class="ai-setup-customer-grid" id="ai-setup-customer-grid">
+              <!-- Populated by JS -->
+            </div>
+            <button class="ai-setup-add-customer-btn" id="ai-setup-add-customer-btn" type="button">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add customer
+            </button>
+          </div>
+
+          <!-- Role section -->
+          <div class="ai-setup-section">
+            <h3 class="ai-setup-section-label">Role</h3>
+            <div class="ai-setup-role-grid">
+              <button class="ai-setup-role-card" data-role="admin">
+                <div class="ai-setup-role-icon">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                  </svg>
+                </div>
+                <div class="ai-setup-role-label">Admin</div>
+                <div class="ai-setup-role-desc">Configuring for the entire company</div>
+              </button>
+              <button class="ai-setup-role-card" data-role="supervisor">
+                <div class="ai-setup-role-icon">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                  </svg>
+                </div>
+                <div class="ai-setup-role-label">Supervisor</div>
+                <div class="ai-setup-role-desc">Configuring for yourself and your team</div>
+              </button>
+              <button class="ai-setup-role-card" data-role="agent">
+                <div class="ai-setup-role-icon">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+                  </svg>
+                </div>
+                <div class="ai-setup-role-label">Agent</div>
+                <div class="ai-setup-role-desc">Configuring for yourself</div>
+              </button>
+            </div>
+          </div>
+
+          <!-- Footer -->
+          <div class="ai-setup-meta-footer">
+            <p class="ai-setup-quickswitch-note">You can change company or role anytime from settings.</p>
+            <button class="btn btn-primary ai-setup-continue-btn" id="ai-setup-continue-btn" disabled>Continue</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- State 2: Chat + preview split -->
+      <div class="ai-setup-split" id="ai-setup-split" style="display:none;">
+        <!-- Left: Chat -->
+        <div class="ai-setup-chat">
+          <div class="ai-setup-chat-header">
+            <h3>Analytics Setup Assistant</h3>
+            <button class="ai-setup-skip-btn" id="ai-setup-skip-btn">Skip assisted setup</button>
+          </div>
+          <div class="ai-setup-messages" id="ai-setup-messages">
+            <!-- Chat bubbles, option cards, source inputs rendered here -->
+          </div>
+          <div class="ai-setup-input-bar">
+            <button class="ai-setup-scroll-btn" id="ai-setup-scroll-btn" aria-label="Scroll to bottom" style="display:none;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"/>
+                <polyline points="19 12 12 19 5 12"/>
+              </svg>
+            </button>
+            <div class="ai-setup-input-wrapper">
+              <textarea class="ai-setup-input" id="ai-setup-input" rows="1" placeholder="Type here..."></textarea>
+              <button class="ai-setup-send" id="ai-setup-send" aria-label="Send">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="19" x2="12" y2="5"/>
+                  <polyline points="5 12 12 5 19 12"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <!-- Right: Preview -->
+        <div class="ai-setup-preview">
+          <div class="ai-setup-preview-header">
+            <span class="ai-setup-preview-label">Dashboard Preview</span>
+            <span class="ai-setup-preview-role" id="ai-setup-preview-role"></span>
+          </div>
+          <div class="ai-setup-preview-content" id="ai-setup-preview-content">
+            <!-- Simplified tab bar + widget cards rendered by JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+  </main>
+
+
+  <!-- Widget Drawer — persistent right panel -->
+  <div class="widget-drawer" id="widget-drawer">
+    <div class="drawer-header">
+      <h3>Manage widgets</h3>
+      <button class="drawer-close" id="drawer-close">&times;</button>
+    </div>
+    <div class="drawer-toolbar">
+      <div class="drawer-filter-chip" id="drawer-category-chip">
+        <span id="drawer-category-label">All</span>
+        <svg width="10" height="10" viewBox="0 0 12 12"><path d="M3 5l3 3 3-3" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+      </div>
+      <div class="drawer-filter-chip" id="drawer-sort-chip">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 4h10M3 8h7M3 12h4"/></svg>
+        <span id="drawer-sort-label">Default</span>
+        <svg width="10" height="10" viewBox="0 0 12 12"><path d="M3 5l3 3 3-3" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+      </div>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </div>
+
+  <!-- Filter dropdown (reusable — Date & Team) -->
+  <div class="filter-dropdown" id="filter-dropdown" style="display:none;">
+    <div class="filter-dropdown-content" id="filter-dropdown-content"></div>
+  </div>
+
+  <!-- Channel two-panel dropdown -->
+  <div class="channel-dropdown" id="channel-dropdown" style="display:none;">
+    <div class="channel-dropdown-types" id="channel-dropdown-types"></div>
+    <div class="channel-dropdown-children" id="channel-dropdown-children" style="display:none;"></div>
+  </div>
+
+  <!-- Opportunity Action Modal -->
+  <div class="modal-overlay" id="opportunity-modal-overlay" style="display:none;">
+    <div class="opportunity-modal" id="opportunity-modal">
+      <div class="modal-header">
+        <h3>AI Recommendation</h3>
+        <button class="drawer-close" id="opp-modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="opp-modal-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="opp-modal-cancel">Cancel</button>
+        <button class="btn btn-primary" id="opp-modal-confirm">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Team Display Settings Modal -->
+  <div class="modal-overlay" id="team-settings-modal-overlay" style="display:none;">
+    <div class="team-settings-modal" id="team-settings-modal">
+      <div class="modal-header">
+        <div>
+          <h3 id="team-settings-title">Manage teams</h3>
+          <p class="modal-subtitle" id="team-settings-subtitle">Update team names and focus for this view.</p>
+        </div>
+        <button class="drawer-close" id="team-settings-modal-close">&times;</button>
+      </div>
+      <div class="modal-body team-settings-body" id="team-settings-body">
+        <!-- Populated by JS -->
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="team-settings-cancel">Cancel</button>
+        <button class="btn btn-primary" id="team-settings-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="customer-settings-modal-overlay" style="display:none;">
+    <div class="customer-settings-modal" id="customer-settings-modal">
+      <div class="modal-header">
+        <div>
+          <h3>Edit customers</h3>
+          <p class="modal-subtitle">Update the starter customer profiles used as initial onboarding context.</p>
+        </div>
+        <button class="drawer-close" id="customer-settings-modal-close">&times;</button>
+      </div>
+      <div class="modal-body customer-settings-body" id="customer-settings-body">
+        <!-- Populated by JS -->
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="customer-settings-cancel">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete Tab Confirmation Modal -->
+  <div class="modal-overlay" id="delete-tab-modal-overlay" style="display:none;">
+    <div class="opportunity-modal" id="delete-tab-modal">
+      <div class="modal-header">
+        <h3>Remove tab</h3>
+        <button class="drawer-close" id="delete-tab-modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="delete-tab-modal-body">
+        <p>Are you sure you want to remove <strong id="delete-tab-name"></strong>?</p>
+        <p style="color:var(--gray-500);font-size:12px;margin-top:8px;">The tab layout will be removed, but all widgets remain available in the Manage Widgets sidebar to set up the same page again.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="delete-tab-cancel">Cancel</button>
+        <button class="btn btn-danger" id="delete-tab-confirm">Remove tab</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- Post-onboarding Assistant FAB + Panel -->
+  <button class="assistant-fab" id="assistant-fab" style="display:none;" aria-label="Analytics Assistant">
+    <span class="assistant-fab-icon assistant-fab-icon-star" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M7.1 2.3c.5 2.1 2.1 3.7 4.2 4.2-2.1.5-3.7 2.1-4.2 4.2-.5-2.1-2.1-3.7-4.2-4.2 2.1-.5 3.7-2.1 4.2-4.2z"/>
+        <path d="M15.8 5.6c.7 3 3 5.3 6 6-3 .7-5.3 3-6 6-.7-3-3-5.3-6-6 3-.7 5.3-3 6-6z"/>
+        <path d="M5 14.7c.4 1.7 1.7 3 3.4 3.4-1.7.4-3 1.7-3.4 3.4-.4-1.7-1.7-3-3.4-3.4 1.7-.4 3-1.7 3.4-3.4z"/>
+      </svg>
+    </span>
+    <span class="assistant-fab-icon assistant-fab-icon-robot" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+        <path d="M12 3.7v2.4" stroke="#9aa4b4" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="12" cy="2.5" r="1.5" fill="#00a884"/>
+        <rect x="5.1" y="7.2" width="13.8" height="10.7" rx="4.1" fill="#667286"/>
+        <rect x="5.1" y="7.2" width="13.8" height="10.7" rx="4.1" stroke="#394254" stroke-width="1"/>
+        <circle cx="9.3" cy="12.2" r="1.45" fill="#eef8ff"/>
+        <circle cx="14.7" cy="12.2" r="1.45" fill="#eef8ff"/>
+      </svg>
+    </span>
+  </button>
+  <div class="assistant-panel" id="assistant-panel" style="display:none;">
+    <div class="assistant-panel-header">
+      <div class="assistant-panel-header-left">
+        <button class="assistant-panel-compact-toggle" id="assistant-panel-compact-toggle" aria-label="Resize panel" title="Compact view">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </button>
+        <span class="assistant-panel-title">Analytics Assistant</span>
+      </div>
+      <button class="assistant-panel-close" id="assistant-panel-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="assistant-panel-messages" id="assistant-panel-messages"></div>
+    <div class="assistant-panel-input-bar">
+      <textarea class="assistant-panel-input" id="assistant-panel-input" rows="1" placeholder="Ask anything..."></textarea>
+      <button class="assistant-panel-send" id="assistant-panel-send" aria-label="Send">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Settings and admin popouts removed — now rendered by ProtoGuide overlays -->
+
+  <!-- Nav scope toast -->
+  <div id="nav-toast" class="nav-toast">Outside prototype scope.</div>
+
+  <!-- Onboarding overlay -->
+  <div id="onboarding-overlay" class="onboarding-overlay" style="display:none;">
+    <div class="onboarding-scrim"></div>
+    <div class="onboarding-steps" id="onboarding-steps"></div>
+  </div>
+
+  <!-- Source processing libs (loaded on demand by admin-assistant.js) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+
+  <script src="profile.js"></script>
+  <script src="widget-catalog.js"></script>
+  <script src="dashboard-config.js"></script>
+  <script src="assistant-storage.js"></script>
+  <script src="admin-assistant.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

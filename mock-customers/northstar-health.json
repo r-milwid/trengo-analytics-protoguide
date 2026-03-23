@@ -1,0 +1,175 @@
+{
+  "id": "northstar-health",
+  "company": "Northstar Wellness",
+  "industry": "Health & Beauty Services",
+  "stage": "mature",
+  "workspaceCreatedAt": "2024-09-15T00:00:00Z",
+  "goals": ["Reduce first response time during peak booking hours", "Improve cross-location coordination for VIP clients", "Increase AI resolution rate for routine booking and product inquiries", "Maintain CSAT above 90%"],
+  "featureStatus": { "voice": true, "aiAgents": true, "csat": true, "journeys": true, "knowledgeBase": true },
+  "productSummary": "Premium wellness and beauty group operating spa locations, beauty salons, and wellness studios across the Benelux and France. Handles appointment booking, client communication, membership management, and therapist coordination.",
+  "website": "https://www.northstarwellness.eu/",
+  "helpCenterUrl": "https://help.northstarwellness.eu/",
+  "knownTeams": [
+    { "name": "Client Services", "likelyFocus": "resolve", "size": 12, "description": "Handles booking inquiries, service questions, complaints, and general client communication" },
+    { "name": "Membership Sales", "likelyFocus": "convert", "size": 6, "description": "Membership sign-ups, package upsells, corporate wellness deals, and gift card sales" },
+    { "name": "Location Onboarding", "likelyFocus": "resolve", "size": 4, "description": "Supports new location launches, staff training, and system rollouts" },
+    { "name": "VIP Client Care", "likelyFocus": "resolve", "size": 3, "description": "Dedicated support for premium members and high-value repeat clients" }
+  ],
+  "channels": ["email", "whatsapp", "live-chat", "voice", "sms"],
+  "plan": "Scale",
+  "estimatedAgents": 25,
+  "terminologyHints": {
+    "customer": "client",
+    "ticket": "request",
+    "deal": "membership deal",
+    "agent": "wellness advisor",
+    "resolution": "resolved"
+  },
+  "currentSetup": {
+    "primaryUseCase": "Client booking management and multi-location service coordination",
+    "busiestChannels": ["whatsapp", "voice"],
+    "avgMonthlyConversations": 8500,
+    "topPainPoints": ["Long first-response times during peak booking hours", "Difficulty tracking escalated service issues across locations"]
+  },
+  "analyticsDataInventory": {
+    "coverageSummary": "Northstar Wellness has support, sales, voice, survey, automation, and knowledge-base source coverage with event, hourly, daily, monthly, and quarterly rollups.",
+    "sourceSystems": [
+      { "name": "Trengo messaging", "entities": ["conversation", "message", "ticket"], "grains": ["event", "15-minute", "hourly", "daily"], "retention": "18 months" },
+      { "name": "Voice platform", "entities": ["call", "queue event", "callback request"], "grains": ["event", "hourly", "daily"], "retention": "15 months" },
+      { "name": "CRM", "entities": ["lead", "deal", "account"], "grains": ["event", "daily snapshot", "monthly"], "retention": "24 months" },
+      { "name": "CSAT tooling", "entities": ["survey send", "survey response"], "grains": ["event", "daily", "monthly"], "retention": "24 months" },
+      { "name": "Automation logs", "entities": ["journey run", "handoff", "guardrail stop"], "grains": ["event", "hourly", "daily"], "retention": "12 months" },
+      { "name": "Knowledge base analytics", "entities": ["article", "article view", "AI citation"], "grains": ["daily", "weekly", "monthly"], "retention": "18 months" }
+    ],
+    "historyWindows": {
+      "eventDays": 180,
+      "hourlyDays": 365,
+      "dailyMonths": 24,
+      "monthlyMonths": 36,
+      "quarterlyYears": 3
+    },
+    "granularities": ["event", "15-minute", "hourly", "daily", "weekly", "monthly", "quarterly"],
+    "joinKeys": ["conversation_id", "ticket_id", "contact_id", "account_id", "deal_id", "call_id", "survey_id", "journey_run_id", "article_id", "agent_id"],
+    "timeDimensions": ["15-minute", "hour", "day", "week", "month", "quarter", "fiscal quarter", "holiday"],
+    "factTables": [
+      { "name": "conversation_events", "grain": "event", "fields": ["conversation_id", "message_id", "ticket_id", "created_at", "first_response_at", "resolved_at", "channel", "team", "agent"] },
+      { "name": "ticket_status_history", "grain": "event", "fields": ["ticket_event_id", "ticket_id", "from_status", "to_status", "queue", "priority", "sla_policy", "changed_at"] },
+      { "name": "deal_stage_history", "grain": "event", "fields": ["stage_event_id", "deal_id", "deal_owner", "stage", "stage_entered_at", "stage_exited_at", "close_reason", "competitor"] },
+      { "name": "call_legs", "grain": "event", "fields": ["call_leg_id", "call_id", "voice_line", "direction", "connection_result", "recording_flag", "hold_seconds", "transfer_count", "queue_entered_at", "answered_at", "ended_at"] },
+      { "name": "survey_responses", "grain": "event", "fields": ["survey_id", "ticket_id", "survey_template", "survey_question", "delivery_channel", "respondent_type", "sentiment_label", "response_at"] },
+      { "name": "agent_presence_intervals", "grain": "interval", "fields": ["agent_id", "schedule_id", "shift_id", "availability_status", "started_at", "ended_at", "online_minutes", "busy_minutes"] },
+      { "name": "journey_step_events", "grain": "event", "fields": ["journey_run_id", "journey_version", "trigger_type", "node_path", "exit_reason", "retry_count", "event_at"] }
+    ],
+    "availableDimensions": {
+      "geography": ["region", "country", "city", "language", "business unit"],
+      "customer": ["account segment", "account tier", "plan", "lifecycle stage", "cohort"],
+      "operations": ["team", "agent", "queue", "priority", "SLA policy", "channel", "hour"],
+      "product": ["product line", "feature area", "issue type", "intent", "intent version"],
+      "goToMarket": ["campaign", "lead source", "partner source", "channel attribution"],
+      "aiAndAutomation": ["AI model", "prompt version", "confidence band", "guardrail type", "journey", "journey version", "trigger type", "exit reason"],
+      "knowledge": ["article", "article category"],
+      "revenueAndSales": ["deal owner", "deal amount", "currency", "close reason", "competitor"],
+      "voice": ["voice line", "connection result", "recording flag", "transfer count", "hold duration"],
+      "feedback": ["survey template", "survey question", "delivery channel", "respondent type", "sentiment label"],
+      "workforce": ["schedule", "shift", "planned capacity", "occupancy band"],
+      "governance": ["source system", "sync timestamp", "quality flag", "fiscal quarter"]
+    },
+    "businessDefinitions": {
+      "openTicket": "Client requests not yet resolved, including pending bookings and service complaints.",
+      "firstResponse": "Time from request creation to first human or approved AI response, excluding auto-acknowledgements.",
+      "resolutionTime": "Time from request creation to final resolved state; reopened requests restart the timer from the reopen event.",
+      "newContact": "First contact from a client or prospect in the trailing 180 days.",
+      "aiResolved": "Requests closed without human handoff after an approved AI response path.",
+      "attributedChannel": "First meaningful inbound channel unless the request is converted to voice within 10 minutes."
+    },
+    "dataQuality": {
+      "refreshCadence": "Hourly for operational metrics, nightly for CRM and finance snapshots.",
+      "lateArrivingWindow": "Up to 48 hours for survey and CRM corrections.",
+      "knownBlindSpots": ["Manual notes from external booking systems are not joined automatically", "Older SMS metadata before 2025-Q2 is daily-only"]
+    },
+    "auditability": {
+      "recordFields": ["source_system", "synced_at", "quality_flag", "is_late_arriving"],
+      "changeHistory": ["merge history", "correction log", "backfill window"],
+      "piiHandling": "Client contact details are access-controlled and masked in shared analytics views."
+    },
+    "knownGaps": [
+      "No direct booking system outcome join for treatment follow-up completion",
+      "Some partner-generated referrals still rely on campaign tags instead of a stable source id"
+    ]
+  },
+  "analyticsDataModel": {
+    "geographies": [
+      { "region": "Benelux", "country": "Netherlands", "city": "Amsterdam", "language": "nl-NL", "businessUnit": "Spa Operations", "weight": 4 },
+      { "region": "France", "country": "France", "city": "Paris", "language": "fr-FR", "businessUnit": "Premium Salons", "weight": 3 },
+      { "region": "DACH", "country": "Germany", "city": "Berlin", "language": "de-DE", "businessUnit": "Wellness Studios", "weight": 2 }
+    ],
+    "accountSegments": [
+      { "accountSegment": "Walk-in clients", "accountTier": "Standard", "plan": "Pay-per-visit", "lifecycleStage": "Active", "cohort": "2024-Q4", "weight": 4 },
+      { "accountSegment": "Members", "accountTier": "Premium", "plan": "Monthly membership", "lifecycleStage": "Expansion", "cohort": "2024-Q1", "weight": 3 },
+      { "accountSegment": "Corporate wellness", "accountTier": "Enterprise", "plan": "Corporate package", "lifecycleStage": "Renewal", "cohort": "2023-Q3", "weight": 2 }
+    ],
+    "queues": [
+      { "queue": "Booking Support", "priority": "High", "slaPolicy": "P2 30m / 8h", "weight": 4 },
+      { "queue": "Treatment Coordination", "priority": "Standard", "slaPolicy": "P3 4h / 24h", "weight": 3 },
+      { "queue": "Urgent Complaints", "priority": "Urgent", "slaPolicy": "P1 15m / 4h", "weight": 2 }
+    ],
+    "productAreas": [
+      { "productLine": "Client Messaging", "featureArea": "Booking reminders", "issueType": "Appointment change", "weight": 4 },
+      { "productLine": "Treatment Coordination", "featureArea": "Referral & loyalty", "issueType": "Referral follow-up", "weight": 3 },
+      { "productLine": "Voice & Callback", "featureArea": "Booking line", "issueType": "Missed call or callback", "weight": 2 },
+      { "productLine": "Admin", "featureArea": "Staff access", "issueType": "Login or account issue", "weight": 2 }
+    ],
+    "campaigns": [
+      { "campaign": "New location launch", "source": "Paid search", "weight": 3 },
+      { "campaign": "Corporate wellness outreach", "source": "Outbound", "weight": 2 },
+      { "campaign": "Referral rewards", "source": "Partner", "weight": 2 },
+      { "campaign": "Seasonal promotions", "source": "Website", "weight": 1 }
+    ],
+    "knowledgeArticles": [
+      { "article": "Reschedule or cancel a booking", "articleCategory": "Bookings", "weight": 4 },
+      { "article": "Reset account or MFA", "articleCategory": "Access", "weight": 3 },
+      { "article": "Membership upgrade options", "articleCategory": "Membership", "weight": 2 },
+      { "article": "Handle no-answer callbacks", "articleCategory": "Voice", "weight": 2 }
+    ],
+    "aiModels": [
+      { "aiModel": "booking-triage-gpt-5-mini", "promptVersion": "booking-triage-v4", "guardrailType": "Privacy", "weight": 4 },
+      { "aiModel": "service-routing-gpt-5-mini", "promptVersion": "service-routing-v3", "guardrailType": "Escalation", "weight": 3 },
+      { "aiModel": "voice-summary-gpt-5-mini", "promptVersion": "voice-summary-v2", "guardrailType": "Compliance", "weight": 2 }
+    ],
+    "automationJourneys": [
+      { "journey": "Booking confirmation", "journeyVersion": "v3.2", "triggerType": "Booking created", "exitReason": "Confirmed automatically", "weight": 4 },
+      { "journey": "Referral follow-up", "journeyVersion": "v2.8", "triggerType": "Referral submitted", "exitReason": "Reward issued", "weight": 3 },
+      { "journey": "Missed-call callback", "journeyVersion": "v1.9", "triggerType": "Missed call", "exitReason": "Callback booked", "weight": 2 }
+    ],
+    "dealAttributes": [
+      { "dealOwner": "Emma Laurent", "currency": "EUR", "closeReason": "Corporate package signed", "competitor": "Urban Sports Club", "weight": 3 },
+      { "dealOwner": "Noah Muller", "currency": "EUR", "closeReason": "Membership upgraded", "competitor": "Treatwell", "weight": 2 },
+      { "dealOwner": "Luca Vermeer", "currency": "GBP", "closeReason": "Pilot converted to annual", "competitor": "Fresha", "weight": 2 }
+    ],
+    "callAttributes": [
+      { "voiceLine": "Booking hotline", "connectionResult": "Connected", "recordingFlag": "Recorded", "weight": 4 },
+      { "voiceLine": "VIP client line", "connectionResult": "Transferred", "recordingFlag": "Recorded", "weight": 3 },
+      { "voiceLine": "Callback queue", "connectionResult": "Voicemail", "recordingFlag": "Not recorded", "weight": 2 }
+    ],
+    "surveyDetails": [
+      { "surveyTemplate": "Post-visit follow-up", "surveyQuestion": "How satisfied were you with your visit today?", "deliveryChannel": "Email", "respondentType": "Client", "sentimentLabel": "Positive", "weight": 3 },
+      { "surveyTemplate": "Service feedback", "surveyQuestion": "Was your treatment handled to your expectations?", "deliveryChannel": "SMS", "respondentType": "Client", "sentimentLabel": "Neutral", "weight": 2 },
+      { "surveyTemplate": "Voice callback survey", "surveyQuestion": "How would you rate the callback experience?", "deliveryChannel": "SMS", "respondentType": "Caller", "sentimentLabel": "Negative", "weight": 1 }
+    ],
+    "workforcePlans": [
+      { "schedule": "Peak booking coverage", "shift": "Morning", "weight": 4 },
+      { "schedule": "Treatment coordination", "shift": "Afternoon", "weight": 3 },
+      { "schedule": "After-hours support", "shift": "Evening", "weight": 2 },
+      { "schedule": "Weekend callback coverage", "shift": "Weekend", "weight": 1 }
+    ],
+    "intentVersions": {
+      "support": "wellness-support-2026.1",
+      "sales": "wellness-sales-2026.1",
+      "default": "wellness-shared-2026.1"
+    },
+    "voiceLines": ["Booking hotline", "VIP client line", "Callback queue"],
+    "supportIntents": ["Appointment changes", "Service complaint", "Product recommendation", "Billing help", "Treatment inquiry", "Loyalty points", "Location info"],
+    "salesIntents": ["Membership inquiry", "Corporate wellness deal", "Pricing request", "Gift card purchase", "Renewal offer", "Partner inquiry", "Package upgrade"]
+  },
+  "suggestedPreviewContext": "Focus on booking responsiveness, cross-location service coordination, membership conversion, and client satisfaction trends."
+}

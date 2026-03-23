@@ -1813,6 +1813,51 @@ body[data-panel="bar"] .ai-panel-inner {
 body[data-panel="bar"]  .modal-overlay { right: calc(var(--panel-bar-w) + 30px); }
 body[data-panel="wide"] .modal-overlay { right: calc(var(--panel-wide-w) + 30px); }
 
+/* ── 10b. Team & Customer modals — fit within panel-adjusted space ── */
+
+.team-settings-modal,
+.customer-settings-modal {
+  max-width: min(92vw, calc(100vw - var(--panel-chat-w) - 90px));
+}
+body[data-panel="bar"] .team-settings-modal,
+body[data-panel="bar"] .customer-settings-modal {
+  max-width: min(92vw, calc(100vw - var(--panel-bar-w) - 90px));
+}
+body[data-panel="wide"] .team-settings-modal,
+body[data-panel="wide"] .customer-settings-modal {
+  max-width: min(92vw, calc(100vw - var(--panel-wide-w) - 90px));
+}
+
+/* Override primary buttons in analytics modals to use ProtoGuide green */
+.team-settings-modal .btn-primary,
+.customer-settings-modal .btn-primary {
+  background: var(--panel-accent);
+  border-color: var(--panel-accent);
+}
+.team-settings-modal .btn-primary:hover,
+.customer-settings-modal .btn-primary:hover {
+  background: var(--panel-accent-strong);
+  border-color: var(--panel-accent-strong);
+}
+
+/* Override scope/toggle buttons in team modal to use ProtoGuide green when selected */
+.team-settings-scope-btn.selected {
+  background: var(--panel-accent) !important;
+  color: #fff !important;
+  border-color: var(--panel-accent) !important;
+}
+
+/* Override add buttons in both modals */
+.team-settings-add-btn,
+.customer-settings-add-btn {
+  color: var(--panel-accent) !important;
+  border-color: var(--panel-accent) !important;
+}
+.team-settings-add-btn:hover,
+.customer-settings-add-btn:hover {
+  background: var(--panel-accent-soft) !important;
+}
+
 /* ── 11. Manage Users Modal ───────────────────────────────── */
 
 .manage-users-card {

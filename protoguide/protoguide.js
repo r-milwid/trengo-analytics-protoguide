@@ -1564,15 +1564,15 @@ All data in the prototype is randomly generated on each page load. KPI values, c
 
     // Actions
     html += '<div class="guide-popout-divider"></div>';
-    html += '<div class="guide-setting-block"><button class="guide-action-btn" id="settings-manage-teams">Manage Teams</button></div>';
-    html += '<div class="guide-setting-block"><button class="guide-action-btn" id="settings-reset-onboarding">Reset Onboarding</button></div>';
-    html += '<div class="guide-setting-block"><button class="guide-action-btn guide-action-btn--danger" id="settings-reset-all">Reset Everything</button></div>';
-
-    // Manage Users (admin only)
+    // Manage Users (admin only) — above Manage Teams
     if (currentUser && hasMinRole(currentUser.role, 'admin')) {
-      html += '<div class="guide-popout-divider"></div>';
       html += '<div class="guide-setting-block"><button class="guide-action-btn" id="settings-manage-users">Manage Users</button></div>';
     }
+    html += '<div class="guide-setting-block"><button class="guide-action-btn" id="settings-manage-teams">Manage Teams</button></div>';
+    html += '<div class="guide-setting-block"><button class="guide-action-btn" id="settings-manage-customers">Manage Customers</button></div>';
+    html += '<div class="guide-popout-divider"></div>';
+    html += '<div class="guide-setting-block"><button class="guide-action-btn" id="settings-reset-onboarding">Reset Onboarding</button></div>';
+    html += '<div class="guide-setting-block"><button class="guide-action-btn guide-action-btn--danger" id="settings-reset-all">Reset Everything</button></div>';
 
     // Sign out
     html += '<div class="guide-popout-divider"></div>';
@@ -1626,6 +1626,11 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     if (manageUsersBtn) manageUsersBtn.addEventListener('click', function() {
       closeAllOverlays();
       openManageUsersModal();
+    });
+
+    var manageCustomersBtn = document.getElementById('settings-manage-customers');
+    if (manageCustomersBtn) manageCustomersBtn.addEventListener('click', function() {
+      postToPrototype({ type: 'guide:action', actionId: 'edit-customers' });
     });
 
     var signOutBtn = document.getElementById('settings-sign-out');

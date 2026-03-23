@@ -23,6 +23,18 @@
     return token ? { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
   }
 
+  // Wrapper for authenticated fetches — auto-redirects to login on 401
+  async function authFetch(url, opts) {
+    var resp = await fetch(url, opts || {});
+    if (resp.status === 401) {
+      localStorage.removeItem('protoguide_user');
+      localStorage.removeItem('protoguide_token');
+      window.location.href = 'protoguide-login.html';
+      throw new Error('Session expired');
+    }
+    return resp;
+  }
+
   // ── Embedded Context (from original sidecar_context.md, now embedded) ────────────
   const CONTEXT_IDENTITY = `Your job is strictly limited to:
 - Answering questions about the Analytics structure shown in the prototype
@@ -1709,8 +1721,8 @@ All data in the prototype is randomly generated on each page load. KPI values, c
 
     try {
       var [domainsResp, usersResp] = await Promise.all([
-        fetch(CHATBOT_PROXY + '/protoguide/domains', { headers: getAuthHeaders() }),
-        fetch(CHATBOT_PROXY + '/protoguide/users', { headers: getAuthHeaders() })
+        authFetch(CHATBOT_PROXY + '/protoguide/domains', { headers: getAuthHeaders() }),
+        authFetch(CHATBOT_PROXY + '/protoguide/users', { headers: getAuthHeaders() })
       ]);
       var domainsData = domainsResp.ok ? await domainsResp.json() : { domains: [] };
       var usersData = usersResp.ok ? await usersResp.json() : { users: [] };
@@ -1779,7 +1791,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       // Wire events
       body.querySelectorAll('.remove-domain-btn').forEach(function(btn) {
         btn.addEventListener('click', async function() {
-          await fetch(CHATBOT_PROXY + '/protoguide/domains/' + encodeURIComponent(btn.dataset.domain), { method: 'DELETE', headers: getAuthHeaders() });
+          await authFetch(CHATBOT_PROXY + '/protoguide/domains/' + encodeURIComponent(btn.dataset.domain), { method: 'DELETE', headers: getAuthHeaders() });
           openManageUsersModal(); // refresh
         });
       });
@@ -1790,7 +1802,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
           var input = document.getElementById('new-domain-input');
           var domain = input.value.trim();
           if (!domain) return;
-          await fetch(CHATBOT_PROXY + '/protoguide/domains', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ domain }) });
+          await authFetch(CHATBOT_PROXY + '/protoguide/domains', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ domain }) });
           openManageUsersModal(); // refresh
         });
       }
@@ -1804,7 +1816,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
           if (!email) return;
           addUserBtn.disabled = true;
           try {
-            await fetch(CHATBOT_PROXY + '/protoguide/users', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ email: email, role: role }) });
+            await authFetch(CHATBOT_PROXY + '/protoguide/users', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ email: email, role: role }) });
             openManageUsersModal(); // refresh
           } catch(e) {
             addUserBtn.disabled = false;
@@ -1815,7 +1827,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       // Wire role change dropdowns
       body.querySelectorAll('.mu-inline-role[data-role-email]').forEach(function(sel) {
         sel.addEventListener('change', async function() {
-          await fetch(CHATBOT_PROXY + '/protoguide/users', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ email: sel.dataset.roleEmail, role: sel.value }) });
+          await authFetch(CHATBOT_PROXY + '/protoguide/users', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ email: sel.dataset.roleEmail, role: sel.value }) });
         });
       });
 
@@ -1823,7 +1835,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       body.querySelectorAll('.mu-remove-btn[data-remove-email]').forEach(function(btn) {
         btn.addEventListener('click', async function() {
           if (!confirm('Remove ' + btn.dataset.removeEmail + '?')) return;
-          await fetch(CHATBOT_PROXY + '/protoguide/users/' + encodeURIComponent(btn.dataset.removeEmail), { method: 'DELETE', headers: getAuthHeaders() });
+          await authFetch(CHATBOT_PROXY + '/protoguide/users/' + encodeURIComponent(btn.dataset.removeEmail), { method: 'DELETE', headers: getAuthHeaders() });
           openManageUsersModal(); // refresh
         });
       });
@@ -2095,8 +2107,11 @@ All data in the prototype is randomly generated on each page load. KPI values, c
           currentUser.role = userData.role;
           localStorage.setItem('protoguide_user', JSON.stringify(currentUser));
         } else {
-          // Token invalid, but allow offline usage with cached role
-          console.warn('ProtoGuide: token verification failed, using cached role');
+          // Token expired — redirect to login for fresh token
+          localStorage.removeItem('protoguide_user');
+          localStorage.removeItem('protoguide_token');
+          window.location.href = 'protoguide-login.html';
+          return;
         }
       } catch (e) {
         console.warn('ProtoGuide: auth check failed (offline?), using cached role');

@@ -20,8 +20,6 @@ const AdminAssistant = (() => {
   const AI_SETUP_MODE_KEY = 'trengo_ai_setup_mode'; // 'onboarding' | 'assistant' | null
   const THREAD_REVEAL_DELAY_MS = 1200;
   const WORKING_WORD_ROTATION_MS = 2400;
-  const META_START_AUTO_SCROLL_DELAY_MS = 200;
-  const META_START_AUTO_SCROLL_TOP_MARGIN = 24;
   const BACKGROUND_WORKING_TOOLS = new Set([
     'inspect_data_capability',
     'plan_semantic_query',
@@ -120,15 +118,12 @@ const AdminAssistant = (() => {
   let _pendingResolve = null; // for blocking UI tools (show_options, show_source_input, etc)
   let _queuedUserMessage = null;
   let _startingOnboarding = false;
-  let _selectedCustomerId = null;  // visual selection on setup screen
-  let _selectedRole = null;        // visual selection on setup screen
   let _runGeneration = 0;
   let _previewRevealGeneration = 0;
   let _previewRevealTimers = [];
   let _threadRevealGeneration = 0;
   let _threadScrollSequence = null;
   let _forceNextSequenceAutoScroll = false;
-  let _metaStartAutoScrollTimeout = null;
   let _robotPreviewRunning = false;
   const _statusWordRotations = new WeakMap();
 
@@ -5041,258 +5036,62 @@ ${role === 'agent'
     return true;
   }
 
-  function clearMetaStartAutoScroll() {
-    if (_metaStartAutoScrollTimeout) {
-      clearTimeout(_metaStartAutoScrollTimeout);
-      _metaStartAutoScrollTimeout = null;
-    }
-  }
-
-  function isElementClippedAtContainerBottom(element, container) {
-    if (!element || !container) return false;
-    const elementRect = element.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    // Trigger when element extends past the container bottom — whether
-    // partially clipped or completely off-screen.
-    return elementRect.bottom > containerRect.bottom;
-  }
-
-  function getElementBottomAfterScroll(element, container, scrollTop) {
-    const elementRect = element.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    const elementTopInContainer = container.scrollTop + (elementRect.top - containerRect.top);
-    const elementBottomInContainer = elementTopInContainer + elementRect.height;
-    return elementBottomInContainer - scrollTop;
-  }
-
-  // On short screens, a partial tap near the bottom should reveal the footer
-  // without scrolling so far that the tapped card disappears above the viewport.
-  function maybeAutoScrollMetaStartBottom(target) {
-    clearMetaStartAutoScroll();
-    if (!target?.isConnected) return;
-
-    const container = document.getElementById('ai-setup-meta');
-    if (!container || !container.isConnected || !isElementClippedAtContainerBottom(target, container)) return;
-
-    const bottomScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-    if (bottomScrollTop <= container.scrollTop + 1) return;
-    if (getElementBottomAfterScroll(target, container, bottomScrollTop) <= META_START_AUTO_SCROLL_TOP_MARGIN) return;
-
-    _metaStartAutoScrollTimeout = window.setTimeout(() => {
-      _metaStartAutoScrollTimeout = null;
-      if (!target.isConnected || !container.isConnected) return;
-      if (!isElementClippedAtContainerBottom(target, container)) return;
-
-      const latestBottomScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-      if (getElementBottomAfterScroll(target, container, latestBottomScrollTop) <= META_START_AUTO_SCROLL_TOP_MARGIN) return;
-
-      const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 'auto' : 'smooth';
-      container.scrollTo({
-        top: latestBottomScrollTop,
-        behavior,
-      });
-    }, META_START_AUTO_SCROLL_DELAY_MS);
-  }
-
-  // ═══════════════════════════════════════════════════════════
-  //  META-START: Customer + Role selection
-  // ═══════════════════════════════════════════════════════════
-
-  async function initMetaStart() {
-    const grid = document.getElementById('ai-setup-customer-grid');
-    if (!grid) return;
+  async function startWithSelection(customerId, role) {
+    if (!customerId || !role) return;
+    window.sendEvent('Onboarding — continue to setup');
 
     let customers = [];
     if (window.CustomerProfilesStore?.loadAll) {
-      try {
-        customers = await window.CustomerProfilesStore.loadAll();
-      } catch (e) {
-        console.warn('[AdminAssistant] Could not load editable customer profiles:', e);
-      }
+      try { customers = await window.CustomerProfilesStore.loadAll(); } catch (_) {}
+    }
+    const customer = customers.find(c => c.id === customerId);
+
+    if (customer) {
+      _customerId = customer.id;
+      _customerData = JSON.parse(JSON.stringify(customer));
+    } else {
+      _customerId = customerId;
+      _customerData = null;
     }
 
-    // Render customer cards
-    grid.innerHTML = '';
-
-    customers.forEach(c => {
-      const card = document.createElement('div');
-      card.className = 'ai-setup-customer-card';
-      card.setAttribute('role', 'button');
-      card.setAttribute('tabindex', '0');
-      card.dataset.customerId = c.id;
-      card.innerHTML = `
-        <span class="ai-setup-customer-name">${escapeHtml(c.company)}</span>
-        <span class="ai-setup-customer-industry">${escapeHtml(c.industry)}</span>
-        ${c.description ? `<span class="ai-setup-customer-description">${escapeHtml(c.description)}</span>` : ''}
-        <button class="ai-setup-customer-edit" type="button" title="Edit customer" aria-label="Edit ${escapeHtml(c.company)}">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-          </svg>
-        </button>
-      `;
-      card.addEventListener('click', (e) => {
-        if (e.target.closest('.ai-setup-customer-edit')) return;
-        selectCustomerCard(c.id);
-        window.sendEvent('Onboarding — selected company: ' + c.company);
-      });
-      card.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          selectCustomerCard(c.id);
-        }
-      });
-      card.querySelector('.ai-setup-customer-edit').addEventListener('click', (e) => {
-        e.stopPropagation();
-        clearMetaStartAutoScroll();
-        if (typeof window.openCustomerSettingsModal === 'function') {
-          window.openCustomerSettingsModal();
-        }
-      });
-      grid.appendChild(card);
-    });
-
-    // Wire add customer button
-    const addBtn = document.getElementById('ai-setup-add-customer-btn');
-    if (addBtn) {
-      addBtn.onclick = () => {
-        clearMetaStartAutoScroll();
-        if (typeof window.openCustomerSettingsModal === 'function') {
-          window.openCustomerSettingsModal();
-        }
-      };
+    _role = role;
+    state.personaRole = _role;
+    if (_role === 'admin') {
+      state.role = 'supervisor';
+    } else {
+      state.role = _role;
     }
+    document.body.dataset.role = state.role;
 
-    // Auto-select previous session
-    autoSelectPrevious(customers);
-  }
-
-  function selectCustomerCard(customerId) {
-    _selectedCustomerId = customerId;
-    document.querySelectorAll('.ai-setup-customer-card').forEach(card => {
-      card.classList.toggle('selected', card.dataset.customerId === customerId);
-    });
-    updateContinueButton();
-    // Scroll to reveal the role section (next step) rather than the clicked card
-    const roleGrid = document.querySelector('.ai-setup-role-grid');
-    if (roleGrid) maybeAutoScrollMetaStartBottom(roleGrid);
-  }
-
-  function selectRoleCard(role) {
-    _selectedRole = role;
-    document.querySelectorAll('.ai-setup-role-card').forEach(card => {
-      card.classList.toggle('selected', card.dataset.role === role);
-    });
-    updateContinueButton();
-    // Scroll to reveal the footer/continue button
-    const footer = document.querySelector('.ai-setup-meta-footer');
-    if (footer) maybeAutoScrollMetaStartBottom(footer);
-  }
-
-  function updateContinueButton() {
-    const btn = document.getElementById('ai-setup-continue-btn');
-    if (!btn) return;
-    btn.disabled = !(_selectedCustomerId && _selectedRole);
-  }
-
-  function autoSelectPrevious(customers) {
-    const active = AssistantStorage.getActiveSession();
-    if (!active.customerId && !active.role) return;
-
-    if (active.customerId && customers.some(c => c.id === active.customerId)) {
-      selectCustomerCard(active.customerId);
-    }
-    if (active.role && ['admin', 'supervisor', 'agent'].includes(active.role)) {
-      selectRoleCard(active.role);
-    }
-  }
-
-  function wireContinueButton() {
-    const btn = document.getElementById('ai-setup-continue-btn');
-    if (!btn || btn.dataset.wired === 'true') return;
-    btn.dataset.wired = 'true';
-    btn.addEventListener('click', async () => {
-      if (!_selectedCustomerId || !_selectedRole) return;
-      window.sendEvent('Onboarding — continue to setup');
-
-      // Resolve customer data
-      let customers = [];
-      if (window.CustomerProfilesStore?.loadAll) {
-        try { customers = await window.CustomerProfilesStore.loadAll(); } catch (_) {}
-      }
-      const customer = customers.find(c => c.id === _selectedCustomerId);
-
-      if (customer) {
-        _customerId = customer.id;
-        _customerData = JSON.parse(JSON.stringify(customer));
-      } else {
-        _customerId = _selectedCustomerId;
-        _customerData = null;
-      }
-
-      _role = _selectedRole;
-      state.personaRole = _role;
-      if (_role === 'admin') {
-        state.role = 'supervisor';
-      } else {
-        state.role = _role;
-      }
-      document.body.dataset.role = state.role;
-
-      // Auto-determine lens from customer team data
-      if (_customerData?.knownTeams?.length) {
-        const focuses = _customerData.knownTeams
-          .map(t => t.likelyFocus)
-          .filter(Boolean);
-        if (focuses.length > 0) {
-          const allResolve = focuses.every(f => f === 'resolve');
-          const allConvert = focuses.every(f => f === 'convert');
-          state.lens = allResolve ? 'support' : allConvert ? 'sales' : null;
-        } else {
-          state.lens = null;
-        }
+    if (_customerData?.knownTeams?.length) {
+      const focuses = _customerData.knownTeams
+        .map(t => t.likelyFocus)
+        .filter(Boolean);
+      if (focuses.length > 0) {
+        const allResolve = focuses.every(f => f === 'resolve');
+        const allConvert = focuses.every(f => f === 'convert');
+        state.lens = allResolve ? 'support' : allConvert ? 'sales' : null;
       } else {
         state.lens = null;
       }
-      if (typeof syncLensButtons === 'function') syncLensButtons();
-      if (typeof window.updateTeamFilterOptions === 'function') {
-        window.updateTeamFilterOptions();
-      }
-      if (typeof window.syncSidebarRobotPreviewAvailability === 'function') {
-        window.syncSidebarRobotPreviewAvailability();
-      }
+    } else {
+      state.lens = null;
+    }
+    if (typeof syncLensButtons === 'function') syncLensButtons();
+    if (typeof window.updateTeamFilterOptions === 'function') {
+      window.updateTeamFilterOptions();
+    }
+    if (typeof window.syncSidebarRobotPreviewAvailability === 'function') {
+      window.syncSidebarRobotPreviewAvailability();
+    }
 
-      startOnboardingChat();
-    });
+    startOnboardingChat();
   }
 
   async function refreshMetaStart() {
-    const previousCustomerId = _selectedCustomerId;
-    const previousRole = _selectedRole;
-    await initMetaStart();
-    // Re-select previous choices if still valid
-    if (previousCustomerId) {
-      const cards = document.querySelectorAll('.ai-setup-customer-card');
-      const stillExists = Array.from(cards).some(c => c.dataset.customerId === previousCustomerId);
-      if (stillExists) {
-        selectCustomerCard(previousCustomerId);
-      } else {
-        _selectedCustomerId = null;
-      }
+    if (window.refreshMetaStartScreen) {
+      await window.refreshMetaStartScreen();
     }
-    if (previousRole) {
-      selectRoleCard(previousRole);
-    }
-    updateContinueButton();
-  }
-
-  function initRoleSelection() {
-    document.querySelectorAll('.ai-setup-role-card').forEach(card => {
-      card.onclick = () => {
-        selectRoleCard(card.dataset.role);
-        window.sendEvent('Onboarding — selected role: ' + card.dataset.role);
-      };
-    });
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -5302,7 +5101,7 @@ ${role === 'agent'
   function startOnboardingChat() {
     if (_startingOnboarding) return;
     _startingOnboarding = true;
-    clearMetaStartAutoScroll();
+    if (window.clearMetaStartAutoScroll) window.clearMetaStartAutoScroll();
 
     // Snapshot state before onboarding begins — saves are suppressed until commit
     snapshotOnboardingState();
@@ -6616,9 +6415,13 @@ ${role === 'agent'
 
     // No mode set — first visit, initialize meta-start
     resetOnboardingUIToStart();
-    initMetaStart();
-    initRoleSelection();
-    wireContinueButton();
+    if (window.initMetaStartScreen) {
+      window.initMetaStartScreen();
+      window.initRoleSelection();
+      window.wireMetaStartContinue();
+    } else {
+      window._pendingMetaStartInit = true;
+    }
     showOnboarding();
   }
 
@@ -6636,7 +6439,7 @@ ${role === 'agent'
   }
 
   function hideOnboarding() {
-    clearMetaStartAutoScroll();
+    if (window.clearMetaStartAutoScroll) window.clearMetaStartAutoScroll();
     const overlay = document.getElementById('ai-setup-overlay');
     if (overlay) overlay.style.display = 'none';
     // Re-enable settings cog clicks after onboarding
@@ -6665,14 +6468,18 @@ ${role === 'agent'
     }
     // First time — show the full-screen onboarding
     resetOnboardingUIToStart();
-    initMetaStart();
-    initRoleSelection();
-    wireContinueButton();
+    if (window.initMetaStartScreen) {
+      window.initMetaStartScreen();
+      window.initRoleSelection();
+      window.wireMetaStartContinue();
+    } else {
+      window._pendingMetaStartInit = true;
+    }
     showOnboarding();
   }
 
   function resetOnboardingUIToStart() {
-    clearMetaStartAutoScroll();
+    if (window.clearMetaStartAutoScroll) window.clearMetaStartAutoScroll();
     const overlay = document.getElementById('ai-setup-overlay');
     const meta = document.getElementById('ai-setup-meta');
     const split = document.getElementById('ai-setup-split');
@@ -6694,11 +6501,10 @@ ${role === 'agent'
     }
 
     // Clear selections on the unified setup screen
-    _selectedCustomerId = null;
-    _selectedRole = null;
     document.querySelectorAll('.ai-setup-customer-card').forEach(card => card.classList.remove('selected'));
     document.querySelectorAll('.ai-setup-role-card').forEach(card => card.classList.remove('selected'));
-    updateContinueButton();
+    const continueBtn = document.getElementById('ai-setup-continue-btn');
+    if (continueBtn) continueBtn.disabled = true;
 
     if (setupMessages) setupMessages.innerHTML = '';
     if (assistantMessages) assistantMessages.innerHTML = '';
@@ -6744,8 +6550,6 @@ ${role === 'agent'
     _customerData = null;
     _customerId = null;
     _role = null;
-    _selectedCustomerId = null;
-    _selectedRole = null;
     _startingOnboarding = false;
 
     // Clear onboarding draft if active — discard without committing
@@ -6767,9 +6571,11 @@ ${role === 'agent'
     }
     if (panel) panel.style.display = 'none';
 
-    await initMetaStart();
-    initRoleSelection();
-    wireContinueButton();
+    if (window.initMetaStartScreen) {
+      await window.initMetaStartScreen();
+      window.initRoleSelection();
+      window.wireMetaStartContinue();
+    }
 
     if (shouldRestart) {
       showOnboarding();
@@ -6866,6 +6672,6 @@ Leave fields as empty strings or empty arrays if not found.`;
     showFAB,
     showOnboarding,
     analyzeFileForCustomer,
-    refreshMetaStart,
+    startWithSelection,
   };
 })();

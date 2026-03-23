@@ -400,6 +400,13 @@ function syncTeamsState(teams, options = {}) {
 window.getPrototypeTeams = getPrototypeTeams;
 window.getRoleScopedPrototypeTeams = getRoleScopedTeams;
 window.syncTeamsState = syncTeamsState;
+window.escapeHtml = escapeHtml;
+window.normalizeTeamUsecase = normalizeTeamUsecase;
+window.normalizeSupervisorScope = normalizeSupervisorScope;
+window.cloneJson = cloneJson;
+window.uniqueNonEmptyLines = uniqueNonEmptyLines;
+window.guessCustomerTeamFocus = guessCustomerTeamFocus;
+window.normalizeCustomerProfile = normalizeCustomerProfile;
 
 let _customerProfilesCache = null;
 
@@ -851,6 +858,7 @@ window.CustomerProfilesStore = {
   guessTeamFocus: guessCustomerTeamFocus,
 };
 window.persistPrototypeTeams = persistPrototypeTeams;
+window.BUILT_IN_CUSTOMER_PROFILES = BUILT_IN_CUSTOMER_PROFILES;
 
 // Initialize tabWidgets for default tabs (each gets all widget IDs from its category)
 function initTabWidgets() {
@@ -5007,8 +5015,6 @@ document.addEventListener('click', (e) => {
 });
 
 // ── TEAM SETTINGS ──────────────────────────────────────────────
-let _teamSettingsDraft = [];
-let _teamSettingsMode = 'session'; // 'session' | 'default'
 
 function applyTeamSettingsFlag() {
   const btn = document.getElementById('team-display-settings-btn');
@@ -5031,8 +5037,8 @@ function getTeamSettingsSource(mode) {
   return liveTeams.length ? liveTeams : getActiveTeams();
 }
 
-function teamSettingsModeMeta() {
-  const editingDefaults = _teamSettingsMode === 'default';
+function teamSettingsModeMeta(mode) {
+  const editingDefaults = (mode || 'session') === 'default';
   return {
     title: editingDefaults ? 'Edit default teams' : 'Manage teams',
     subtitle: editingDefaults
@@ -5041,139 +5047,12 @@ function teamSettingsModeMeta() {
   };
 }
 
-function renderTeamSettingsModal() {
-  const body = document.getElementById('team-settings-body');
-  const title = document.getElementById('team-settings-title');
-  const subtitle = document.getElementById('team-settings-subtitle');
-  if (!body || !title || !subtitle) return;
-
-  const { title: titleText, subtitle: subtitleText } = teamSettingsModeMeta();
-  title.textContent = titleText;
-  subtitle.textContent = subtitleText;
-
-  const editingDefaults = _teamSettingsMode === 'default';
-
-  const rows = _teamSettingsDraft.map((team, index) => {
-    const memberCount = Array.isArray(team.members) ? team.members.length : 0;
-    const memberText = memberCount === 0
-      ? 'No members assigned'
-      : `${memberCount} member${memberCount === 1 ? '' : 's'} linked`;
-
-    return `<div class="team-settings-editor-row ${editingDefaults ? 'editing-defaults' : ''}" data-index="${index}">
-      <div class="team-settings-editor-main">
-        <label class="team-settings-field-label" for="team-settings-name-${index}">Team name</label>
-        <input
-          class="team-settings-name-input"
-          id="team-settings-name-${index}"
-          type="text"
-          value="${escapeHtml(team.name)}"
-          placeholder="Team name"
-        />
-        <div class="team-settings-row-meta">${memberText}</div>
-      </div>
-      <div class="team-settings-editor-focus">
-        <div class="team-settings-field-label">Focus</div>
-        <div class="ai-setup-team-row-choices">
-          ${['resolve', 'convert', 'both'].map(usecase => `
-            <button
-              class="ai-setup-team-choice ${normalizeTeamUsecase(team.usecase) === usecase ? 'selected' : ''}"
-              data-index="${index}"
-              data-usecase="${usecase}"
-              type="button"
-            >${usecase === 'resolve' ? 'Support' : usecase === 'convert' ? 'Sales' : 'Both'}</button>
-          `).join('')}
-        </div>
-      </div>
-      ${editingDefaults ? `
-      <div class="team-settings-editor-scope">
-        <div class="team-settings-field-label">Supervisor onboarding</div>
-        <div class="team-settings-scope-toggle">
-          <button
-            class="team-settings-scope-btn ${normalizeSupervisorScope(team.supervisorScope) ? 'selected' : ''}"
-            data-index="${index}"
-            data-supervisor-scope="true"
-            type="button"
-          >Included</button>
-          <button
-            class="team-settings-scope-btn ${!normalizeSupervisorScope(team.supervisorScope) ? 'selected' : ''}"
-            data-index="${index}"
-            data-supervisor-scope="false"
-            type="button"
-          >Excluded</button>
-        </div>
-      </div>` : ''}
-      <button class="team-settings-delete-btn" data-index="${index}" type="button">Delete</button>
-    </div>`;
-  }).join('');
-
-  body.innerHTML = `
-    <div class="team-settings-toolbar">
-      <div class="team-settings-toolbar-note">${editingDefaults ? 'Default changes affect new or reset team setups on this browser.' : 'Session changes update the team filter and current dashboard view.'}</div>
-    </div>
-    <div class="team-settings-editor-list">${rows}</div>
-    <div class="team-settings-footer-tools">
-      <button class="team-settings-add-btn" id="team-settings-add-btn" type="button">Add team</button>
-    </div>
-    <div class="team-settings-error" id="team-settings-error"></div>
-  `;
-
-  body.querySelectorAll('.team-settings-name-input').forEach(input => {
-    input.addEventListener('input', () => {
-      const index = Number(input.closest('.team-settings-editor-row')?.dataset.index);
-      if (Number.isNaN(index) || !_teamSettingsDraft[index]) return;
-      _teamSettingsDraft[index].name = input.value;
-    });
-  });
-
-  body.querySelectorAll('.ai-setup-team-choice').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const index = Number(btn.dataset.index);
-      if (Number.isNaN(index) || !_teamSettingsDraft[index]) return;
-      _teamSettingsDraft[index].usecase = btn.dataset.usecase;
-      renderTeamSettingsModal();
-    });
-  });
-
-  body.querySelectorAll('[data-supervisor-scope]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const index = Number(btn.dataset.index);
-      if (Number.isNaN(index) || !_teamSettingsDraft[index]) return;
-      _teamSettingsDraft[index].supervisorScope = btn.dataset.supervisorScope === 'true';
-      renderTeamSettingsModal();
-    });
-  });
-
-  body.querySelectorAll('.team-settings-delete-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const index = Number(btn.dataset.index);
-      if (Number.isNaN(index)) return;
-      _teamSettingsDraft.splice(index, 1);
-      renderTeamSettingsModal();
-    });
-  });
-
-  body.querySelector('#team-settings-add-btn')?.addEventListener('click', () => {
-    _teamSettingsDraft.push({
-      name: '',
-      members: [],
-      usecase: 'resolve',
-      supervisorScope: true,
-      originalName: null,
-    });
-    renderTeamSettingsModal();
-    requestAnimationFrame(() => {
-      const lastInput = body.querySelector('.team-settings-editor-row:last-child .team-settings-name-input');
-      lastInput?.focus();
-    });
-  });
-}
-
-function validateTeamSettingsDraft() {
+function validateTeamSettingsDraft(draft) {
   const seen = new Set();
   const renameMap = {};
   const teams = [];
 
-  for (const team of _teamSettingsDraft) {
+  for (const team of draft) {
     const name = String(team?.name || '').trim();
     if (!name) {
       return { error: 'Every team needs a name.' };
@@ -5216,417 +5095,29 @@ function applySavedTeams(teams, renameMap = {}) {
   DashboardConfig.notifyChanged();
 }
 
-function saveTeamSettingsModal() {
-  const body = document.getElementById('team-settings-body');
-  const errorEl = document.getElementById('team-settings-error');
-  const { teams, renameMap, error } = validateTeamSettingsDraft();
-
-  if (error) {
-    if (errorEl) errorEl.textContent = error;
-    return false;
+function applyTeamSettingsDefault(teams) {
+  const hadUserOverride = hasStoredUserTeams();
+  writeStoredTeams(DEFAULT_TEAMS_KEY, teams);
+  if (!hadUserOverride) {
+    syncTeamsState(teams);
+    updateTeamFilterOptions();
+    syncLensButtons();
+    resetViewState();
+    [...state.loadedSections].forEach(sectionId => remountSection(sectionId));
+    if (document.body.classList.contains('drawer-open')) renderDrawerWidgets();
+    DashboardConfig.notifyChanged();
   }
-
-  if (_teamSettingsMode === 'default') {
-    const hadUserOverride = hasStoredUserTeams();
-    writeStoredTeams(DEFAULT_TEAMS_KEY, teams);
-    if (!hadUserOverride) {
-      syncTeamsState(teams);
-      updateTeamFilterOptions();
-      syncLensButtons();
-      resetViewState();
-      [...state.loadedSections].forEach(sectionId => remountSection(sectionId));
-      if (document.body.classList.contains('drawer-open')) renderDrawerWidgets();
-      DashboardConfig.notifyChanged();
-    }
-  } else {
-    applySavedTeams(teams, renameMap);
-  }
-
-  if (body) body.scrollTop = 0;
-  closeTeamSettingsModal();
-  return true;
 }
 
-function openTeamSettingsModal(mode = 'session') {
-  _teamSettingsMode = mode;
-  _teamSettingsDraft = buildTeamSettingsDraft(getTeamSettingsSource(mode));
-  renderTeamSettingsModal();
-  document.getElementById('team-settings-modal-overlay').style.display = 'flex';
-}
-
-function closeTeamSettingsModal() {
-  document.getElementById('team-settings-modal-overlay').style.display = 'none';
-}
-
-let _defaultCustomerProfiles = [];
-let _userCustomerProfiles = [];
-let _addCustomerDraft = null;
-let _editingUserCustomerIndex = null;
-let _editingUserCustomerDraft = null;
-let _addSectionCollapsed = false;
-const _builtInCustomerIds = new Set(BUILT_IN_CUSTOMER_PROFILES.map(p => p.id));
-
-function buildKnownTeamsFromText(value) {
-  return uniqueNonEmptyLines(value).map(name => {
-    const likelyFocus = guessCustomerTeamFocus(name);
-    return likelyFocus ? { name, likelyFocus } : { name };
-  });
-}
-
-function _draftFromProfile(profile, index) {
-  const normalized = normalizeCustomerProfile(profile, index);
-  return {
-    ...cloneJson(normalized),
-    knownTeamsText: (normalized.knownTeams || []).map(t => t.name).join('\n'),
-    extraSourceUrlsText: Array.isArray(normalized.extraSourceUrls) ? normalized.extraSourceUrls.join('\n') : '',
-  };
-}
-
-function _profileFromDraft(draft, index) {
-  return normalizeCustomerProfile({
-    ...draft,
-    company: String(draft.company || '').trim(),
-    industry: String(draft.industry || '').trim(),
-    website: String(draft.website || '').trim(),
-    helpCenterUrl: String(draft.helpCenterUrl || '').trim(),
-    productSummary: String(draft.productSummary || '').trim(),
-    generalNotes: String(draft.generalNotes || '').trim(),
-    extraSourceUrls: uniqueNonEmptyLines(draft.extraSourceUrlsText),
-    knownTeams: buildKnownTeamsFromText(draft.knownTeamsText),
-  }, index);
-}
-
-function _allProfilesList() {
-  return [..._defaultCustomerProfiles, ..._userCustomerProfiles];
-}
-
-function _persistAndRefresh() {
-  saveCustomerProfiles(_allProfilesList());
-  if (window.AdminAssistant?.refreshMetaStart) window.AdminAssistant.refreshMetaStart();
-}
-
-function _validateDraft(draft, existingProfiles, excludeId) {
-  const company = String(draft.company || '').trim();
-  if (!company) return { error: 'Company name is required.' };
-  const dup = existingProfiles.find(p =>
-    p.id !== excludeId && p.company.toLowerCase() === company.toLowerCase()
-  );
-  if (dup) return { error: `"${company}" already exists.` };
-  return { ok: true };
-}
-
-// ── Customer form field template (reused by add + edit) ──
-function _renderCustomerFormFields(draft, prefix) {
-  return `
-    <div class="customer-settings-grid">
-      <div class="customer-settings-field">
-        <label class="team-settings-field-label">Company name</label>
-        <input class="customer-settings-input" data-${prefix}-field="company" type="text" value="${escapeHtml(draft.company || '')}" placeholder="Company name" />
-      </div>
-      <div class="customer-settings-field">
-        <label class="team-settings-field-label">Industry</label>
-        <input class="customer-settings-input" data-${prefix}-field="industry" type="text" value="${escapeHtml(draft.industry || '')}" placeholder="Industry" />
-      </div>
-      <div class="customer-settings-field">
-        <label class="team-settings-field-label">Website</label>
-        <input class="customer-settings-input" data-${prefix}-field="website" type="url" value="${escapeHtml(draft.website || '')}" placeholder="https://example.com" />
-      </div>
-      <div class="customer-settings-field">
-        <label class="team-settings-field-label">Help center / docs URL</label>
-        <input class="customer-settings-input" data-${prefix}-field="helpCenterUrl" type="url" value="${escapeHtml(draft.helpCenterUrl || '')}" placeholder="https://help.example.com" />
-      </div>
-      <div class="customer-settings-field-wide">
-        <label class="team-settings-field-label">Product or service summary</label>
-        <textarea class="customer-settings-textarea" data-${prefix}-field="productSummary" placeholder="What does this company do?">${escapeHtml(draft.productSummary || '')}</textarea>
-      </div>
-      <div class="customer-settings-field">
-        <label class="team-settings-field-label">Known teams</label>
-        <textarea class="customer-settings-textarea" data-${prefix}-field="knownTeamsText" placeholder="One team per line">${escapeHtml(draft.knownTeamsText || '')}</textarea>
-      </div>
-      <div class="customer-settings-field">
-        <label class="team-settings-field-label">Extra source URLs</label>
-        <textarea class="customer-settings-textarea" data-${prefix}-field="extraSourceUrlsText" placeholder="One URL per line">${escapeHtml(draft.extraSourceUrlsText || '')}</textarea>
-      </div>
-      <div class="customer-settings-field-wide">
-        <label class="team-settings-field-label">General information</label>
-        <textarea class="customer-settings-textarea" data-${prefix}-field="generalNotes" placeholder="Anything else the onboarding agent should know about this customer...">${escapeHtml(draft.generalNotes || '')}</textarea>
-      </div>
-    </div>`;
-}
-
-function renderCustomerSettingsModal() {
-  const body = document.getElementById('customer-settings-body');
-  if (!body) return;
-
-  const modalEl = document.getElementById('customer-settings-modal');
-  if (modalEl) {
-    const h3 = modalEl.querySelector('.modal-header h3');
-    const sub = modalEl.querySelector('.modal-subtitle');
-    if (h3) h3.textContent = 'Manage Customers';
-    if (sub) sub.textContent = 'Add your own customer profiles or use the built-in defaults.';
-  }
-
-  const isAddCollapsed = _addSectionCollapsed || _editingUserCustomerIndex !== null;
-
-  // ── Section 1: Default customers ──
-  const defaultRows = _defaultCustomerProfiles.map(p => `
-    <div class="cs-default-row">
-      <span class="cs-default-company">${escapeHtml(p.company)}</span>
-      <span class="cs-default-sep">&middot;</span>
-      <span class="cs-default-description">${escapeHtml(p.description || p.industry || '')}</span>
-    </div>`).join('');
-
-  const section1 = `
-    <div class="cs-section">
-      <div class="cs-section-header">
-        <div class="cs-section-title">Default Customers</div>
-        <div class="cs-section-note">System-level demo profiles — these can't be edited or removed.</div>
-      </div>
-      <div class="cs-defaults-list">${defaultRows}</div>
-    </div>`;
-
-  // ── Section 2: Add new customer ──
-  const section2 = `
-    <div class="cs-section cs-section-add${isAddCollapsed ? ' collapsed' : ''}">
-      <button class="cs-add-collapsed-header" id="cs-expand-add-btn" type="button">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Add New Customer
-      </button>
-      <div class="cs-section-header">
-        <div class="cs-section-title">Add New Customer</div>
-      </div>
-      <div class="cs-add-form">
-        ${_renderCustomerFormFields(_addCustomerDraft || {}, 'add')}
-        <div class="cs-add-form-actions">
-          <button class="cs-add-save-btn" id="cs-add-save-btn" type="button">Save</button>
-          <button class="customer-settings-add-btn customer-settings-upload-btn" id="customer-settings-upload-btn" type="button">Upload file</button>
-          <input type="file" id="customer-settings-file-input" accept=".pdf,.docx,.txt,.csv" style="display:none">
-        </div>
-        <div class="customer-settings-upload-status" id="customer-settings-upload-status" style="display:none"></div>
-        <div class="cs-error" id="cs-add-error"></div>
-      </div>
-    </div>`;
-
-  // ── Section 3: User customers ──
-  let userRows = '';
-  if (_userCustomerProfiles.length === 0) {
-    userRows = '<div class="cs-user-empty">No custom customers yet.</div>';
-  } else {
-    userRows = _userCustomerProfiles.map((p, i) => {
-      const isEditing = _editingUserCustomerIndex === i;
-      let html = `
-        <div class="cs-user-row${isEditing ? ' editing' : ''}" data-user-index="${i}">
-          <div class="cs-user-info">
-            <span class="cs-user-company">${escapeHtml(p.company)}</span>
-            <span class="cs-user-industry">${escapeHtml(p.industry || '')}</span>
-          </div>
-          <div class="cs-user-actions">
-            <button class="cs-user-edit-btn" data-user-edit="${i}" type="button" title="Edit">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
-            </button>
-            <button class="cs-user-delete-btn" data-user-delete="${i}" type="button" title="Delete">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                <path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-              </svg>
-            </button>
-          </div>
-        </div>`;
-      if (isEditing && _editingUserCustomerDraft) {
-        html += `
-          <div class="cs-user-edit-drawer">
-            ${_renderCustomerFormFields(_editingUserCustomerDraft, 'edit')}
-            <div class="cs-edit-drawer-actions">
-              <button class="cs-edit-cancel-btn" id="cs-edit-cancel-btn" type="button">Cancel</button>
-              <button class="cs-edit-save-btn" id="cs-edit-save-btn" type="button">Save</button>
-            </div>
-            <div class="cs-error" id="cs-edit-error"></div>
-          </div>`;
-      }
-      return html;
-    }).join('');
-  }
-
-  const section3 = `
-    <div class="cs-section">
-      <div class="cs-section-header">
-        <div class="cs-section-title">Your Customers</div>
-      </div>
-      <div class="cs-user-list">${userRows}</div>
-    </div>`;
-
-  body.innerHTML = section1 + section2 + section3;
-
-  // ── Wire events ──
-
-  // Add form: bind inputs to _addCustomerDraft
-  body.querySelectorAll('[data-add-field]').forEach(input => {
-    input.addEventListener('input', () => {
-      if (_addCustomerDraft) _addCustomerDraft[input.dataset.addField] = input.value;
-    });
-  });
-
-  // Add form: save
-  body.querySelector('#cs-add-save-btn')?.addEventListener('click', () => {
-    const errorEl = body.querySelector('#cs-add-error');
-    const v = _validateDraft(_addCustomerDraft, _allProfilesList(), null);
-    if (v.error) { if (errorEl) errorEl.textContent = v.error; return; }
-    const profile = _profileFromDraft(_addCustomerDraft, _userCustomerProfiles.length);
-    _userCustomerProfiles.push(profile);
-    _persistAndRefresh();
-    _addCustomerDraft = { ...createBlankCustomerProfile(), knownTeamsText: '', extraSourceUrlsText: '' };
-    renderCustomerSettingsModal();
-    requestAnimationFrame(() => {
-      const rows = body.querySelectorAll('.cs-user-row');
-      if (rows.length) rows[rows.length - 1].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    });
-  });
-
-  // Add form: upload file
-  body.querySelector('#customer-settings-upload-btn')?.addEventListener('click', () => {
-    body.querySelector('#customer-settings-file-input')?.click();
-  });
-  body.querySelector('#customer-settings-file-input')?.addEventListener('change', async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const statusEl = body.querySelector('#customer-settings-upload-status');
-    const uploadBtn = body.querySelector('#customer-settings-upload-btn');
-    if (statusEl) { statusEl.style.display = ''; statusEl.textContent = `Analyzing ${file.name}…`; }
-    if (uploadBtn) uploadBtn.disabled = true;
-    try {
-      const profile = await AdminAssistant.analyzeFileForCustomer(file);
-      _addCustomerDraft = {
-        ...createBlankCustomerProfile(),
-        company: profile.company || '',
-        industry: profile.industry || '',
-        website: profile.website || '',
-        helpCenterUrl: profile.helpCenterUrl || '',
-        productSummary: profile.productSummary || '',
-        generalNotes: profile.generalNotes || '',
-        knownTeamsText: (profile.knownTeams || []).join('\n'),
-        extraSourceUrlsText: '',
-      };
-      // Ensure add section is expanded
-      _editingUserCustomerIndex = null;
-      _editingUserCustomerDraft = null;
-      renderCustomerSettingsModal();
-    } catch (err) {
-      if (statusEl) statusEl.textContent = `Failed to analyze file: ${err.message}`;
-    } finally {
-      if (uploadBtn) uploadBtn.disabled = false;
-    }
-  });
-
-  // Expand add section (when collapsed)
-  body.querySelector('#cs-expand-add-btn')?.addEventListener('click', () => {
-    _editingUserCustomerIndex = null;
-    _editingUserCustomerDraft = null;
-    _addSectionCollapsed = false;
-    renderCustomerSettingsModal();
-  });
-
-  // User customer: edit buttons
-  body.querySelectorAll('[data-user-edit]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const idx = Number(btn.dataset.userEdit);
-      if (Number.isNaN(idx) || !_userCustomerProfiles[idx]) return;
-      _editingUserCustomerIndex = idx;
-      _editingUserCustomerDraft = _draftFromProfile(_userCustomerProfiles[idx], idx);
-      renderCustomerSettingsModal();
-    });
-  });
-
-  // User customer: delete buttons
-  body.querySelectorAll('[data-user-delete]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const idx = Number(btn.dataset.userDelete);
-      if (Number.isNaN(idx) || !_userCustomerProfiles[idx]) return;
-      if (!confirm(`Delete "${_userCustomerProfiles[idx].company}"?`)) return;
-      _userCustomerProfiles.splice(idx, 1);
-      if (_editingUserCustomerIndex === idx) {
-        _editingUserCustomerIndex = null;
-        _editingUserCustomerDraft = null;
-      } else if (_editingUserCustomerIndex !== null && _editingUserCustomerIndex > idx) {
-        _editingUserCustomerIndex--;
-      }
-      _persistAndRefresh();
-      renderCustomerSettingsModal();
-    });
-  });
-
-  // Edit drawer: bind inputs
-  body.querySelectorAll('[data-edit-field]').forEach(input => {
-    input.addEventListener('input', () => {
-      if (_editingUserCustomerDraft) _editingUserCustomerDraft[input.dataset.editField] = input.value;
-    });
-  });
-
-  // Edit drawer: save
-  body.querySelector('#cs-edit-save-btn')?.addEventListener('click', () => {
-    const errorEl = body.querySelector('#cs-edit-error');
-    const originalId = _userCustomerProfiles[_editingUserCustomerIndex]?.id;
-    const v = _validateDraft(_editingUserCustomerDraft, _allProfilesList(), originalId);
-    if (v.error) { if (errorEl) errorEl.textContent = v.error; return; }
-    _userCustomerProfiles[_editingUserCustomerIndex] = _profileFromDraft(_editingUserCustomerDraft, _editingUserCustomerIndex);
-    _editingUserCustomerIndex = null;
-    _editingUserCustomerDraft = null;
-    _addSectionCollapsed = true;
-    _persistAndRefresh();
-    renderCustomerSettingsModal();
-  });
-
-  // Edit drawer: cancel
-  body.querySelector('#cs-edit-cancel-btn')?.addEventListener('click', () => {
-    _editingUserCustomerIndex = null;
-    _editingUserCustomerDraft = null;
-    _addSectionCollapsed = true;
-    renderCustomerSettingsModal();
-  });
-}
-
-async function openCustomerSettingsModal() {
-  const profiles = await loadCustomerProfiles();
-  _defaultCustomerProfiles = profiles.filter(p => _builtInCustomerIds.has(p.id));
-  _userCustomerProfiles = profiles.filter(p => !_builtInCustomerIds.has(p.id));
-  _addCustomerDraft = { ...createBlankCustomerProfile(), knownTeamsText: '', extraSourceUrlsText: '' };
-  _editingUserCustomerIndex = null;
-  _editingUserCustomerDraft = null;
-  _addSectionCollapsed = false;
-  renderCustomerSettingsModal();
-  const overlay = document.getElementById('customer-settings-modal-overlay');
-  if (overlay) overlay.style.display = 'flex';
-}
-
-function closeCustomerSettingsModal() {
-  const overlay = document.getElementById('customer-settings-modal-overlay');
-  if (overlay) overlay.style.display = 'none';
-}
 
 // Wire up button and modal controls
 const teamSettingsBtn = document.getElementById('team-display-settings-btn');
 if (teamSettingsBtn) {
   teamSettingsBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    openTeamSettingsModal();
+    if (window.openTeamSettingsModal) window.openTeamSettingsModal();
   });
 }
-
-document.getElementById('team-settings-modal-close')?.addEventListener('click', closeTeamSettingsModal);
-document.getElementById('team-settings-cancel')?.addEventListener('click', closeTeamSettingsModal);
-document.getElementById('team-settings-save')?.addEventListener('click', saveTeamSettingsModal);
-document.getElementById('customer-settings-modal-close')?.addEventListener('click', closeCustomerSettingsModal);
-document.getElementById('customer-settings-cancel')?.addEventListener('click', closeCustomerSettingsModal);
-
-// Close on overlay backdrop click
-document.getElementById('team-settings-modal-overlay')?.addEventListener('click', (e) => {
-  if (e.target === document.getElementById('team-settings-modal-overlay')) closeTeamSettingsModal();
-});
-document.getElementById('customer-settings-modal-overlay')?.addEventListener('click', (e) => {
-  if (e.target === document.getElementById('customer-settings-modal-overlay')) closeCustomerSettingsModal();
-});
 
 applyTeamSettingsFlag();
 syncLensButtons();
@@ -5805,201 +5296,29 @@ window._prototypeGuideAPI = {
   },
   triggerAction: function (actionId) {
     switch (actionId) {
-      case 'manage-teams': openTeamSettingsModal(); break;
-      case 'add-customer': openCustomerSettingsModal(); break;
-      case 'edit-customers': openCustomerSettingsModal(); break;
-      case 'edit-teams': openTeamSettingsModal('default'); break;
+      case 'manage-teams': if (window.openTeamSettingsModal) window.openTeamSettingsModal(); break;
+      case 'add-customer': if (window.openCustomerSettingsModal) window.openCustomerSettingsModal(); break;
+      case 'edit-customers': if (window.openCustomerSettingsModal) window.openCustomerSettingsModal(); break;
+      case 'edit-teams': if (window.openTeamSettingsModal) window.openTeamSettingsModal('default'); break;
       case 'reset-all': performResetAll(); break;
       case 'reset-onboarding': performResetOnboarding(); break;
       case 'reset-subnav': performResetSubnav(); break;
     }
   }
 };
+window.buildTeamSettingsDraft = buildTeamSettingsDraft;
+window.getTeamSettingsSource = getTeamSettingsSource;
+window.teamSettingsModeMeta = teamSettingsModeMeta;
+window.validateTeamSettingsDraft = validateTeamSettingsDraft;
+window.applySavedTeams = applySavedTeams;
+window.applyTeamSettingsDefault = applyTeamSettingsDefault;
+window.mountSection = mountSection;
+window.performResetOnboarding = performResetOnboarding;
+window.performResetAll = performResetAll;
+window.performResetSubnav = performResetSubnav;
 
 // ── AI ONBOARDING ASSISTANT INITIALIZATION ───────────────────
 if (typeof AdminAssistant !== 'undefined') {
   AdminAssistant.init();
 }
 
-// ── ONBOARDING OVERLAY ──────────────────────────────────────
-(function() {
-  const ONBOARDING_KEY = 'trengo_onboarding_done';
-  const AI_SETUP_MODE_KEY = 'trengo_ai_setup_mode';
-  const WALKTHROUGH_TITLE = 'Prototype Walkthrough';
-  const WALKTHROUGH_SUBTITLE = 'Internal only. Quick context for reviewers providing feedback.';
-  const ONBOARDING_STEPS = [
-    {
-      text: 'This prototype explores a customisable analytics model with five broadly applicable default sections. Focus feedback on the overall structure, logic, and decisions it supports.'
-    },
-    {
-      text: 'ProtoGuide — the panel on the right — answers concept questions and collects your feedback. Use the icons below its header for settings.'
-    },
-    {
-      text: 'The default navigation is only a starting point. The model is designed to be customised to each company’s language, structure, and priorities. In edit mode, users can also add, remove, reorder, and resize charts.'
-    }
-  ];
-
-  let onboardingStep = 0;
-  const overlay       = document.getElementById('onboarding-overlay');
-  const stepsContainer = document.getElementById('onboarding-steps');
-  let onboardingBodyText = null;
-  let onboardingSkipBtn = null;
-  let onboardingNextBtn = null;
-  let onboardingDots = [];
-
-  function animateStepText() {
-    if (!onboardingBodyText) return;
-    onboardingBodyText.classList.remove('onboarding-step-text-enter');
-    // Restart the text-only transition for each new message.
-    void onboardingBodyText.offsetWidth;
-    onboardingBodyText.classList.add('onboarding-step-text-enter');
-  }
-
-  function updateControls() {
-    if (!onboardingSkipBtn || !onboardingNextBtn) return;
-    const isLastStep = onboardingStep === ONBOARDING_STEPS.length - 1;
-    onboardingSkipBtn.classList.toggle('hidden', isLastStep);
-    onboardingSkipBtn.disabled = isLastStep;
-    onboardingNextBtn.innerHTML = isLastStep
-      ? '<span class="onboarding-next-text">Done</span><svg class="onboarding-next-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
-      : '<span class="onboarding-next-text">Next</span><svg class="onboarding-next-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>';
-  }
-
-  function updateDots() {
-    onboardingDots.forEach((dot, i) => {
-      dot.classList.toggle('active', i === onboardingStep);
-    });
-  }
-
-  function showStep(index, { animate = true } = {}) {
-    onboardingStep = index;
-    if (onboardingBodyText) {
-      onboardingBodyText.textContent = ONBOARDING_STEPS[index].text;
-      if (animate) animateStepText();
-      else onboardingBodyText.classList.remove('onboarding-step-text-enter');
-    }
-    updateControls();
-    updateDots();
-  }
-
-  function nextOnboardingStep() {
-    const nextIndex = onboardingStep + 1;
-    if (nextIndex >= ONBOARDING_STEPS.length) {
-      closeOnboarding();
-      return;
-    }
-    showStep(nextIndex);
-  }
-
-  function closeOnboarding() {
-    overlay.classList.add('closing');
-    localStorage.setItem(ONBOARDING_KEY, 'true');
-    setTimeout(() => {
-      overlay.style.display = 'none';
-      overlay.classList.remove('closing');
-      stepsContainer.innerHTML = '';
-      onboardingBodyText = null;
-      onboardingSkipBtn = null;
-      onboardingNextBtn = null;
-      onboardingDots = [];
-    }, 350);
-  }
-
-  function showOnboarding() {
-    stepsContainer.innerHTML = '';
-    const card = document.createElement('div');
-    card.className = 'onboarding-step-card';
-
-    const header = document.createElement('div');
-    header.className = 'onboarding-card-header';
-
-    const title = document.createElement('h2');
-    title.className = 'onboarding-title';
-    title.textContent = WALKTHROUGH_TITLE;
-
-    const subtitle = document.createElement('p');
-    subtitle.className = 'onboarding-subtitle';
-    subtitle.textContent = WALKTHROUGH_SUBTITLE;
-
-    header.appendChild(title);
-    header.appendChild(subtitle);
-    card.appendChild(header);
-
-    const bodyWrap = document.createElement('div');
-    bodyWrap.className = 'onboarding-step-body';
-
-    const bodyTextWrap = document.createElement('div');
-    bodyTextWrap.className = 'onboarding-step-text-wrap';
-
-    const body = document.createElement('p');
-    body.className = 'onboarding-step-text';
-    body.setAttribute('aria-live', 'polite');
-    bodyTextWrap.appendChild(body);
-    bodyWrap.appendChild(bodyTextWrap);
-    card.appendChild(bodyWrap);
-
-    const footer = document.createElement('div');
-    footer.className = 'onboarding-card-footer';
-
-    const dotsWrap = document.createElement('div');
-    dotsWrap.className = 'onboarding-dots';
-    onboardingDots = ONBOARDING_STEPS.map(() => {
-      const dot = document.createElement('div');
-      dot.className = 'onboarding-dot';
-      dotsWrap.appendChild(dot);
-      return dot;
-    });
-
-    const skipBtn = document.createElement('button');
-    skipBtn.className = 'onboarding-skip';
-    skipBtn.innerHTML = 'Skip intro <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-    skipBtn.addEventListener('click', closeOnboarding);
-
-    const nextBtn = document.createElement('button');
-    nextBtn.className = 'onboarding-next';
-    nextBtn.addEventListener('click', nextOnboardingStep);
-
-    footer.appendChild(dotsWrap);
-    footer.appendChild(skipBtn);
-    footer.appendChild(nextBtn);
-    card.appendChild(footer);
-
-    stepsContainer.appendChild(card);
-    onboardingBodyText = body;
-    onboardingSkipBtn = skipBtn;
-    onboardingNextBtn = nextBtn;
-    onboardingStep = 0;
-    overlay.classList.remove('closing');
-    overlay.style.display = 'block';
-    showStep(0, { animate: false });
-  }
-
-  function initOnboarding() {
-    if (localStorage.getItem(ONBOARDING_KEY)) return;
-    if (typeof AdminAssistant !== 'undefined' && localStorage.getItem(AI_SETUP_MODE_KEY) !== 'assistant') return;
-
-    // Wait for analytics page to be visible, then show walkthrough
-    const waitForReady = () => {
-      const analyticsPage = document.getElementById('analytics-page');
-      if (analyticsPage && analyticsPage.style.display !== 'none') {
-        const overviewContent = document.querySelector('.section-content[data-section="overview"]');
-        if (overviewContent && !overviewContent.classList.contains('loaded')) {
-          mountSection('overview');
-        }
-        setTimeout(showOnboarding, 100);
-      } else {
-        setTimeout(waitForReady, 200);
-      }
-    };
-    setTimeout(waitForReady, 300);
-  }
-
-  window.triggerWalkthrough = function() {
-    localStorage.removeItem(ONBOARDING_KEY);
-    const overviewContent = document.querySelector('.section-content[data-section="overview"]');
-    if (overviewContent && !overviewContent.classList.contains('loaded')) mountSection('overview');
-    setTimeout(showOnboarding, 300);
-  };
-
-  initOnboarding();
-})();

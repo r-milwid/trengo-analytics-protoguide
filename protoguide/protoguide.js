@@ -1386,8 +1386,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
   if (userMenuReset) {
     userMenuReset.addEventListener('click', () => {
       if (userMenuPopover) userMenuPopover.style.display = 'none';
-      const api = window._prototypeGuideAPI;
-      if (api) api.triggerAction('reset-all');
+      if (window.performResetAll) window.performResetAll();
       // Clear chat
       messages.length = 0;
       pendingFeedback = null;
@@ -1443,7 +1442,6 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     else if (msg.type === 'guide:set-flag') api.setFlag(msg.flagId, msg.value);
     else if (msg.type === 'guide:set-toggle') api.setToggle(msg.key, msg.checked);
     else if (msg.type === 'guide:set-slider') api.setSlider(msg.key, msg.value);
-    else if (msg.type === 'guide:action') api.triggerAction(msg.actionId);
   }
 
   // ── Overlays (settings, insights — rendered inside guide panel) ─
@@ -1538,6 +1536,733 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     });
   }
 
+  // ── Team Settings Modal (migrated from app.js) ───────────
+  let _teamSettingsDraft = [];
+  let _teamSettingsMode = 'session';
+
+  function renderTeamSettingsModal() {
+    const body = document.getElementById('team-settings-body');
+    const title = document.getElementById('team-settings-title');
+    const subtitle = document.getElementById('team-settings-subtitle');
+    if (!body || !title || !subtitle) return;
+
+    const { title: titleText, subtitle: subtitleText } = window.teamSettingsModeMeta(_teamSettingsMode);
+    title.textContent = titleText;
+    subtitle.textContent = subtitleText;
+
+    const editingDefaults = _teamSettingsMode === 'default';
+
+    const rows = _teamSettingsDraft.map((team, index) => {
+      const memberCount = Array.isArray(team.members) ? team.members.length : 0;
+      const memberText = memberCount === 0
+        ? 'No members assigned'
+        : `${memberCount} member${memberCount === 1 ? '' : 's'} linked`;
+
+      return `<div class="team-settings-editor-row ${editingDefaults ? 'editing-defaults' : ''}" data-index="${index}">
+        <div class="team-settings-editor-main">
+          <label class="team-settings-field-label" for="team-settings-name-${index}">Team name</label>
+          <input
+            class="team-settings-name-input"
+            id="team-settings-name-${index}"
+            type="text"
+            value="${window.escapeHtml(team.name)}"
+            placeholder="Team name"
+          />
+          <div class="team-settings-row-meta">${memberText}</div>
+        </div>
+        <div class="team-settings-editor-focus">
+          <div class="team-settings-field-label">Focus</div>
+          <div class="ai-setup-team-row-choices">
+            ${['resolve', 'convert', 'both'].map(usecase => `
+              <button
+                class="ai-setup-team-choice ${window.normalizeTeamUsecase(team.usecase) === usecase ? 'selected' : ''}"
+                data-index="${index}"
+                data-usecase="${usecase}"
+                type="button"
+              >${usecase === 'resolve' ? 'Support' : usecase === 'convert' ? 'Sales' : 'Both'}</button>
+            `).join('')}
+          </div>
+        </div>
+        ${editingDefaults ? `
+        <div class="team-settings-editor-scope">
+          <div class="team-settings-field-label">Supervisor onboarding</div>
+          <div class="team-settings-scope-toggle">
+            <button
+              class="team-settings-scope-btn ${window.normalizeSupervisorScope(team.supervisorScope) ? 'selected' : ''}"
+              data-index="${index}"
+              data-supervisor-scope="true"
+              type="button"
+            >Included</button>
+            <button
+              class="team-settings-scope-btn ${!window.normalizeSupervisorScope(team.supervisorScope) ? 'selected' : ''}"
+              data-index="${index}"
+              data-supervisor-scope="false"
+              type="button"
+            >Excluded</button>
+          </div>
+        </div>` : ''}
+        <button class="team-settings-delete-btn" data-index="${index}" type="button">Delete</button>
+      </div>`;
+    }).join('');
+
+    body.innerHTML = `
+      <div class="team-settings-toolbar">
+        <div class="team-settings-toolbar-note">${editingDefaults ? 'Default changes affect new or reset team setups on this browser.' : 'Session changes update the team filter and current dashboard view.'}</div>
+      </div>
+      <div class="team-settings-editor-list">${rows}</div>
+      <div class="team-settings-footer-tools">
+        <button class="team-settings-add-btn" id="team-settings-add-btn" type="button">Add team</button>
+      </div>
+      <div class="team-settings-error" id="team-settings-error"></div>
+    `;
+
+    body.querySelectorAll('.team-settings-name-input').forEach(input => {
+      input.addEventListener('input', () => {
+        const index = Number(input.closest('.team-settings-editor-row')?.dataset.index);
+        if (Number.isNaN(index) || !_teamSettingsDraft[index]) return;
+        _teamSettingsDraft[index].name = input.value;
+      });
+    });
+
+    body.querySelectorAll('.ai-setup-team-choice').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const index = Number(btn.dataset.index);
+        if (Number.isNaN(index) || !_teamSettingsDraft[index]) return;
+        _teamSettingsDraft[index].usecase = btn.dataset.usecase;
+        renderTeamSettingsModal();
+      });
+    });
+
+    body.querySelectorAll('[data-supervisor-scope]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const index = Number(btn.dataset.index);
+        if (Number.isNaN(index) || !_teamSettingsDraft[index]) return;
+        _teamSettingsDraft[index].supervisorScope = btn.dataset.supervisorScope === 'true';
+        renderTeamSettingsModal();
+      });
+    });
+
+    body.querySelectorAll('.team-settings-delete-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const index = Number(btn.dataset.index);
+        if (Number.isNaN(index)) return;
+        _teamSettingsDraft.splice(index, 1);
+        renderTeamSettingsModal();
+      });
+    });
+
+    body.querySelector('#team-settings-add-btn')?.addEventListener('click', () => {
+      _teamSettingsDraft.push({
+        name: '',
+        members: [],
+        usecase: 'resolve',
+        supervisorScope: true,
+        originalName: null,
+      });
+      renderTeamSettingsModal();
+      requestAnimationFrame(() => {
+        const lastInput = body.querySelector('.team-settings-editor-row:last-child .team-settings-name-input');
+        lastInput?.focus();
+      });
+    });
+  }
+
+  function saveTeamSettingsModal() {
+    const body = document.getElementById('team-settings-body');
+    const errorEl = document.getElementById('team-settings-error');
+    const { teams, renameMap, error } = window.validateTeamSettingsDraft(_teamSettingsDraft);
+
+    if (error) {
+      if (errorEl) errorEl.textContent = error;
+      return false;
+    }
+
+    if (_teamSettingsMode === 'default') {
+      window.applyTeamSettingsDefault(teams);
+    } else {
+      window.applySavedTeams(teams, renameMap);
+    }
+
+    if (body) body.scrollTop = 0;
+    closeTeamSettingsModal();
+    return true;
+  }
+
+  function openTeamSettingsModal(mode = 'session') {
+    _teamSettingsMode = mode;
+    _teamSettingsDraft = window.buildTeamSettingsDraft(window.getTeamSettingsSource(mode));
+    renderTeamSettingsModal();
+    document.getElementById('team-settings-modal-overlay').style.display = 'flex';
+  }
+
+  function closeTeamSettingsModal() {
+    document.getElementById('team-settings-modal-overlay').style.display = 'none';
+  }
+
+  // Wire team settings modal buttons
+  document.getElementById('team-settings-modal-close')?.addEventListener('click', closeTeamSettingsModal);
+  document.getElementById('team-settings-cancel')?.addEventListener('click', closeTeamSettingsModal);
+  document.getElementById('team-settings-save')?.addEventListener('click', saveTeamSettingsModal);
+  document.getElementById('team-settings-modal-overlay')?.addEventListener('click', (e) => {
+    if (e.target === document.getElementById('team-settings-modal-overlay')) closeTeamSettingsModal();
+  });
+
+  window.openTeamSettingsModal = openTeamSettingsModal;
+
+  // ── Customer Settings Modal (migrated from app.js) ───────
+  var _defaultCustomerProfiles = [];
+  var _userCustomerProfiles = [];
+  var _addCustomerDraft = null;
+  var _editingUserCustomerIndex = null;
+  var _editingUserCustomerDraft = null;
+  var _addSectionCollapsed = false;
+  var _builtInCustomerIds = new Set();
+
+  function buildKnownTeamsFromText(value) {
+    return window.uniqueNonEmptyLines(value).map(function(name) {
+      var likelyFocus = window.guessCustomerTeamFocus(name);
+      return likelyFocus ? { name: name, likelyFocus: likelyFocus } : { name: name };
+    });
+  }
+
+  function _draftFromProfile(profile, index) {
+    var normalized = window.normalizeCustomerProfile(profile, index);
+    return Object.assign({}, window.cloneJson(normalized), {
+      knownTeamsText: (normalized.knownTeams || []).map(function(t) { return t.name; }).join('\n'),
+      extraSourceUrlsText: Array.isArray(normalized.extraSourceUrls) ? normalized.extraSourceUrls.join('\n') : '',
+    });
+  }
+
+  function _profileFromDraft(draft, index) {
+    return window.normalizeCustomerProfile(Object.assign({}, draft, {
+      company: String(draft.company || '').trim(),
+      industry: String(draft.industry || '').trim(),
+      website: String(draft.website || '').trim(),
+      helpCenterUrl: String(draft.helpCenterUrl || '').trim(),
+      productSummary: String(draft.productSummary || '').trim(),
+      generalNotes: String(draft.generalNotes || '').trim(),
+      extraSourceUrls: window.uniqueNonEmptyLines(draft.extraSourceUrlsText),
+      knownTeams: buildKnownTeamsFromText(draft.knownTeamsText),
+    }), index);
+  }
+
+  function _allProfilesList() {
+    return _defaultCustomerProfiles.concat(_userCustomerProfiles);
+  }
+
+  function _persistAndRefreshCustomers() {
+    window.CustomerProfilesStore.saveAll(_allProfilesList());
+    refreshMetaStartScreen();
+  }
+
+  function _validateCustomerDraft(draft, existingProfiles, excludeId) {
+    var company = String(draft.company || '').trim();
+    if (!company) return { error: 'Company name is required.' };
+    var dup = existingProfiles.find(function(p) {
+      return p.id !== excludeId && p.company.toLowerCase() === company.toLowerCase();
+    });
+    if (dup) return { error: '"' + company + '" already exists.' };
+    return { ok: true };
+  }
+
+  function _renderCustomerFormFields(draft, prefix) {
+    return '\
+      <div class="customer-settings-grid">\
+        <div class="customer-settings-field">\
+          <label class="team-settings-field-label">Company name</label>\
+          <input class="customer-settings-input" data-' + prefix + '-field="company" type="text" value="' + window.escapeHtml(draft.company || '') + '" placeholder="Company name" />\
+        </div>\
+        <div class="customer-settings-field">\
+          <label class="team-settings-field-label">Industry</label>\
+          <input class="customer-settings-input" data-' + prefix + '-field="industry" type="text" value="' + window.escapeHtml(draft.industry || '') + '" placeholder="Industry" />\
+        </div>\
+        <div class="customer-settings-field">\
+          <label class="team-settings-field-label">Website</label>\
+          <input class="customer-settings-input" data-' + prefix + '-field="website" type="url" value="' + window.escapeHtml(draft.website || '') + '" placeholder="https://example.com" />\
+        </div>\
+        <div class="customer-settings-field">\
+          <label class="team-settings-field-label">Help center / docs URL</label>\
+          <input class="customer-settings-input" data-' + prefix + '-field="helpCenterUrl" type="url" value="' + window.escapeHtml(draft.helpCenterUrl || '') + '" placeholder="https://help.example.com" />\
+        </div>\
+        <div class="customer-settings-field-wide">\
+          <label class="team-settings-field-label">Product or service summary</label>\
+          <textarea class="customer-settings-textarea" data-' + prefix + '-field="productSummary" placeholder="What does this company do?">' + window.escapeHtml(draft.productSummary || '') + '</textarea>\
+        </div>\
+        <div class="customer-settings-field">\
+          <label class="team-settings-field-label">Known teams</label>\
+          <textarea class="customer-settings-textarea" data-' + prefix + '-field="knownTeamsText" placeholder="One team per line">' + window.escapeHtml(draft.knownTeamsText || '') + '</textarea>\
+        </div>\
+        <div class="customer-settings-field">\
+          <label class="team-settings-field-label">Extra source URLs</label>\
+          <textarea class="customer-settings-textarea" data-' + prefix + '-field="extraSourceUrlsText" placeholder="One URL per line">' + window.escapeHtml(draft.extraSourceUrlsText || '') + '</textarea>\
+        </div>\
+        <div class="customer-settings-field-wide">\
+          <label class="team-settings-field-label">General information</label>\
+          <textarea class="customer-settings-textarea" data-' + prefix + '-field="generalNotes" placeholder="Anything else the onboarding agent should know about this customer...">' + window.escapeHtml(draft.generalNotes || '') + '</textarea>\
+        </div>\
+      </div>';
+  }
+
+  function renderCustomerSettingsModal() {
+    var body = document.getElementById('customer-settings-body');
+    if (!body) return;
+
+    var modalEl = document.getElementById('customer-settings-modal');
+    if (modalEl) {
+      var h3 = modalEl.querySelector('.modal-header h3');
+      var sub = modalEl.querySelector('.modal-subtitle');
+      if (h3) h3.textContent = 'Manage Customers';
+      if (sub) sub.textContent = 'Add your own customer profiles or use the built-in defaults.';
+    }
+
+    var isAddCollapsed = _addSectionCollapsed || _editingUserCustomerIndex !== null;
+
+    var defaultRows = _defaultCustomerProfiles.map(function(p) {
+      return '<div class="cs-default-row">' +
+        '<span class="cs-default-company">' + window.escapeHtml(p.company) + '</span>' +
+        '<span class="cs-default-sep">&middot;</span>' +
+        '<span class="cs-default-description">' + window.escapeHtml(p.description || p.industry || '') + '</span>' +
+      '</div>';
+    }).join('');
+
+    var section1 = '\
+      <div class="cs-section">\
+        <div class="cs-section-header">\
+          <div class="cs-section-title">Default Customers</div>\
+          <div class="cs-section-note">System-level demo profiles \u2014 these can\'t be edited or removed.</div>\
+        </div>\
+        <div class="cs-defaults-list">' + defaultRows + '</div>\
+      </div>';
+
+    var section2 = '\
+      <div class="cs-section cs-section-add' + (isAddCollapsed ? ' collapsed' : '') + '">\
+        <button class="cs-add-collapsed-header" id="cs-expand-add-btn" type="button">\
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>\
+          Add New Customer\
+        </button>\
+        <div class="cs-section-header">\
+          <div class="cs-section-title">Add New Customer</div>\
+        </div>\
+        <div class="cs-add-form">\
+          ' + _renderCustomerFormFields(_addCustomerDraft || {}, 'add') + '\
+          <div class="cs-add-form-actions">\
+            <button class="cs-add-save-btn" id="cs-add-save-btn" type="button">Save</button>\
+            <button class="customer-settings-add-btn customer-settings-upload-btn" id="customer-settings-upload-btn" type="button">Upload file</button>\
+            <input type="file" id="customer-settings-file-input" accept=".pdf,.docx,.txt,.csv" style="display:none">\
+          </div>\
+          <div class="customer-settings-upload-status" id="customer-settings-upload-status" style="display:none"></div>\
+          <div class="cs-error" id="cs-add-error"></div>\
+        </div>\
+      </div>';
+
+    var userRows = '';
+    if (_userCustomerProfiles.length === 0) {
+      userRows = '<div class="cs-user-empty">No custom customers yet.</div>';
+    } else {
+      userRows = _userCustomerProfiles.map(function(p, i) {
+        var isEditing = _editingUserCustomerIndex === i;
+        var html = '\
+          <div class="cs-user-row' + (isEditing ? ' editing' : '') + '" data-user-index="' + i + '">\
+            <div class="cs-user-info">\
+              <span class="cs-user-company">' + window.escapeHtml(p.company) + '</span>\
+              <span class="cs-user-industry">' + window.escapeHtml(p.industry || '') + '</span>\
+            </div>\
+            <div class="cs-user-actions">\
+              <button class="cs-user-edit-btn" data-user-edit="' + i + '" type="button" title="Edit">\
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">\
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>\
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>\
+                </svg>\
+              </button>\
+              <button class="cs-user-delete-btn" data-user-delete="' + i + '" type="button" title="Delete">\
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">\
+                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>\
+                  <path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>\
+                </svg>\
+              </button>\
+            </div>\
+          </div>';
+        if (isEditing && _editingUserCustomerDraft) {
+          html += '\
+            <div class="cs-user-edit-drawer">\
+              ' + _renderCustomerFormFields(_editingUserCustomerDraft, 'edit') + '\
+              <div class="cs-edit-drawer-actions">\
+                <button class="cs-edit-cancel-btn" id="cs-edit-cancel-btn" type="button">Cancel</button>\
+                <button class="cs-edit-save-btn" id="cs-edit-save-btn" type="button">Save</button>\
+              </div>\
+              <div class="cs-error" id="cs-edit-error"></div>\
+            </div>';
+        }
+        return html;
+      }).join('');
+    }
+
+    var section3 = '\
+      <div class="cs-section">\
+        <div class="cs-section-header">\
+          <div class="cs-section-title">Your Customers</div>\
+        </div>\
+        <div class="cs-user-list">' + userRows + '</div>\
+      </div>';
+
+    body.innerHTML = section1 + section2 + section3;
+
+    // Wire events
+    body.querySelectorAll('[data-add-field]').forEach(function(input) {
+      input.addEventListener('input', function() {
+        if (_addCustomerDraft) _addCustomerDraft[input.dataset.addField] = input.value;
+      });
+    });
+
+    var addSaveBtn = body.querySelector('#cs-add-save-btn');
+    if (addSaveBtn) addSaveBtn.addEventListener('click', function() {
+      var errorEl = body.querySelector('#cs-add-error');
+      var v = _validateCustomerDraft(_addCustomerDraft, _allProfilesList(), null);
+      if (v.error) { if (errorEl) errorEl.textContent = v.error; return; }
+      var profile = _profileFromDraft(_addCustomerDraft, _userCustomerProfiles.length);
+      _userCustomerProfiles.push(profile);
+      _persistAndRefreshCustomers();
+      _addCustomerDraft = Object.assign({}, window.CustomerProfilesStore.createBlank(), { knownTeamsText: '', extraSourceUrlsText: '' });
+      renderCustomerSettingsModal();
+      requestAnimationFrame(function() {
+        var rows = body.querySelectorAll('.cs-user-row');
+        if (rows.length) rows[rows.length - 1].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    });
+
+    var uploadBtn = body.querySelector('#customer-settings-upload-btn');
+    if (uploadBtn) uploadBtn.addEventListener('click', function() {
+      var fileInput = body.querySelector('#customer-settings-file-input');
+      if (fileInput) fileInput.click();
+    });
+    var fileInput = body.querySelector('#customer-settings-file-input');
+    if (fileInput) fileInput.addEventListener('change', function(e) {
+      var file = e.target.files && e.target.files[0];
+      if (!file) return;
+      var statusEl = body.querySelector('#customer-settings-upload-status');
+      var ulBtn = body.querySelector('#customer-settings-upload-btn');
+      if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Analyzing ' + file.name + '\u2026'; }
+      if (ulBtn) ulBtn.disabled = true;
+      window.AdminAssistant.analyzeFileForCustomer(file).then(function(profile) {
+        _addCustomerDraft = Object.assign({}, window.CustomerProfilesStore.createBlank(), {
+          company: profile.company || '',
+          industry: profile.industry || '',
+          website: profile.website || '',
+          helpCenterUrl: profile.helpCenterUrl || '',
+          productSummary: profile.productSummary || '',
+          generalNotes: profile.generalNotes || '',
+          knownTeamsText: (profile.knownTeams || []).join('\n'),
+          extraSourceUrlsText: '',
+        });
+        _editingUserCustomerIndex = null;
+        _editingUserCustomerDraft = null;
+        renderCustomerSettingsModal();
+      }).catch(function(err) {
+        if (statusEl) statusEl.textContent = 'Failed to analyze file: ' + err.message;
+      }).finally(function() {
+        if (ulBtn) ulBtn.disabled = false;
+      });
+    });
+
+    var expandAddBtn = body.querySelector('#cs-expand-add-btn');
+    if (expandAddBtn) expandAddBtn.addEventListener('click', function() {
+      _editingUserCustomerIndex = null;
+      _editingUserCustomerDraft = null;
+      _addSectionCollapsed = false;
+      renderCustomerSettingsModal();
+    });
+
+    body.querySelectorAll('[data-user-edit]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var idx = Number(btn.dataset.userEdit);
+        if (Number.isNaN(idx) || !_userCustomerProfiles[idx]) return;
+        _editingUserCustomerIndex = idx;
+        _editingUserCustomerDraft = _draftFromProfile(_userCustomerProfiles[idx], idx);
+        renderCustomerSettingsModal();
+      });
+    });
+
+    body.querySelectorAll('[data-user-delete]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var idx = Number(btn.dataset.userDelete);
+        if (Number.isNaN(idx) || !_userCustomerProfiles[idx]) return;
+        if (!confirm('Delete "' + _userCustomerProfiles[idx].company + '"?')) return;
+        _userCustomerProfiles.splice(idx, 1);
+        if (_editingUserCustomerIndex === idx) {
+          _editingUserCustomerIndex = null;
+          _editingUserCustomerDraft = null;
+        } else if (_editingUserCustomerIndex !== null && _editingUserCustomerIndex > idx) {
+          _editingUserCustomerIndex--;
+        }
+        _persistAndRefreshCustomers();
+        renderCustomerSettingsModal();
+      });
+    });
+
+    body.querySelectorAll('[data-edit-field]').forEach(function(input) {
+      input.addEventListener('input', function() {
+        if (_editingUserCustomerDraft) _editingUserCustomerDraft[input.dataset.editField] = input.value;
+      });
+    });
+
+    var editSaveBtn = body.querySelector('#cs-edit-save-btn');
+    if (editSaveBtn) editSaveBtn.addEventListener('click', function() {
+      var errorEl = body.querySelector('#cs-edit-error');
+      var originalId = _userCustomerProfiles[_editingUserCustomerIndex] && _userCustomerProfiles[_editingUserCustomerIndex].id;
+      var v = _validateCustomerDraft(_editingUserCustomerDraft, _allProfilesList(), originalId);
+      if (v.error) { if (errorEl) errorEl.textContent = v.error; return; }
+      _userCustomerProfiles[_editingUserCustomerIndex] = _profileFromDraft(_editingUserCustomerDraft, _editingUserCustomerIndex);
+      _editingUserCustomerIndex = null;
+      _editingUserCustomerDraft = null;
+      _addSectionCollapsed = true;
+      _persistAndRefreshCustomers();
+      renderCustomerSettingsModal();
+    });
+
+    var editCancelBtn = body.querySelector('#cs-edit-cancel-btn');
+    if (editCancelBtn) editCancelBtn.addEventListener('click', function() {
+      _editingUserCustomerIndex = null;
+      _editingUserCustomerDraft = null;
+      _addSectionCollapsed = true;
+      renderCustomerSettingsModal();
+    });
+  }
+
+  function openCustomerSettingsModal() {
+    window.CustomerProfilesStore.loadAll().then(function(profiles) {
+      if (_builtInCustomerIds.size === 0 && window.BUILT_IN_CUSTOMER_PROFILES) {
+        window.BUILT_IN_CUSTOMER_PROFILES.forEach(function(p) { _builtInCustomerIds.add(p.id); });
+      }
+      _defaultCustomerProfiles = profiles.filter(function(p) { return _builtInCustomerIds.has(p.id); });
+      _userCustomerProfiles = profiles.filter(function(p) { return !_builtInCustomerIds.has(p.id); });
+      _addCustomerDraft = Object.assign({}, window.CustomerProfilesStore.createBlank(), { knownTeamsText: '', extraSourceUrlsText: '' });
+      _editingUserCustomerIndex = null;
+      _editingUserCustomerDraft = null;
+      _addSectionCollapsed = false;
+      renderCustomerSettingsModal();
+      var overlay = document.getElementById('customer-settings-modal-overlay');
+      if (overlay) overlay.style.display = 'flex';
+    });
+  }
+
+  function closeCustomerSettingsModal() {
+    var overlay = document.getElementById('customer-settings-modal-overlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  // Wire customer settings modal buttons
+  document.getElementById('customer-settings-modal-close')?.addEventListener('click', closeCustomerSettingsModal);
+  document.getElementById('customer-settings-cancel')?.addEventListener('click', closeCustomerSettingsModal);
+  document.getElementById('customer-settings-modal-overlay')?.addEventListener('click', function(e) {
+    if (e.target === document.getElementById('customer-settings-modal-overlay')) closeCustomerSettingsModal();
+  });
+
+  window.openCustomerSettingsModal = openCustomerSettingsModal;
+
+  // ── Meta-Start: Customer + Role Selection (migrated from admin-assistant.js) ──
+  const META_START_AUTO_SCROLL_DELAY_MS = 200;
+  const META_START_AUTO_SCROLL_TOP_MARGIN = 24;
+  let _selectedCustomerId = null;
+  let _selectedRole = null;
+  let _metaStartAutoScrollTimeout = null;
+
+  function clearMetaStartAutoScroll() {
+    if (_metaStartAutoScrollTimeout) {
+      clearTimeout(_metaStartAutoScrollTimeout);
+      _metaStartAutoScrollTimeout = null;
+    }
+  }
+
+  function isElementClippedAtContainerBottom(element, container) {
+    if (!element || !container) return false;
+    const elementRect = element.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    return elementRect.bottom > containerRect.bottom;
+  }
+
+  function getElementBottomAfterScroll(element, container, scrollTop) {
+    const elementRect = element.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const elementTopInContainer = container.scrollTop + (elementRect.top - containerRect.top);
+    const elementBottomInContainer = elementTopInContainer + elementRect.height;
+    return elementBottomInContainer - scrollTop;
+  }
+
+  function maybeAutoScrollMetaStartBottom(target) {
+    clearMetaStartAutoScroll();
+    if (!target?.isConnected) return;
+
+    const container = document.getElementById('ai-setup-meta');
+    if (!container || !container.isConnected || !isElementClippedAtContainerBottom(target, container)) return;
+
+    const bottomScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    if (bottomScrollTop <= container.scrollTop + 1) return;
+    if (getElementBottomAfterScroll(target, container, bottomScrollTop) <= META_START_AUTO_SCROLL_TOP_MARGIN) return;
+
+    _metaStartAutoScrollTimeout = window.setTimeout(() => {
+      _metaStartAutoScrollTimeout = null;
+      if (!target.isConnected || !container.isConnected) return;
+      if (!isElementClippedAtContainerBottom(target, container)) return;
+
+      const latestBottomScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+      if (getElementBottomAfterScroll(target, container, latestBottomScrollTop) <= META_START_AUTO_SCROLL_TOP_MARGIN) return;
+
+      const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 'auto' : 'smooth';
+      container.scrollTo({
+        top: latestBottomScrollTop,
+        behavior,
+      });
+    }, META_START_AUTO_SCROLL_DELAY_MS);
+  }
+
+  function selectCustomerCard(customerId) {
+    _selectedCustomerId = customerId;
+    document.querySelectorAll('.ai-setup-customer-card').forEach(card => {
+      card.classList.toggle('selected', card.dataset.customerId === customerId);
+    });
+    updateContinueButton();
+    const roleGrid = document.querySelector('.ai-setup-role-grid');
+    if (roleGrid) maybeAutoScrollMetaStartBottom(roleGrid);
+  }
+
+  function selectRoleCard(role) {
+    _selectedRole = role;
+    document.querySelectorAll('.ai-setup-role-card').forEach(card => {
+      card.classList.toggle('selected', card.dataset.role === role);
+    });
+    updateContinueButton();
+    const footer = document.querySelector('.ai-setup-meta-footer');
+    if (footer) maybeAutoScrollMetaStartBottom(footer);
+  }
+
+  function updateContinueButton() {
+    const btn = document.getElementById('ai-setup-continue-btn');
+    if (!btn) return;
+    btn.disabled = !(_selectedCustomerId && _selectedRole);
+  }
+
+  function autoSelectPrevious(customers) {
+    if (!window.AssistantStorage) return;
+    const active = window.AssistantStorage.getActiveSession();
+    if (!active.customerId && !active.role) return;
+
+    if (active.customerId && customers.some(c => c.id === active.customerId)) {
+      selectCustomerCard(active.customerId);
+    }
+    if (active.role && ['admin', 'supervisor', 'agent'].includes(active.role)) {
+      selectRoleCard(active.role);
+    }
+  }
+
+  async function initMetaStartScreen() {
+    const grid = document.getElementById('ai-setup-customer-grid');
+    if (!grid) return;
+
+    let customers = [];
+    if (window.CustomerProfilesStore?.loadAll) {
+      try {
+        customers = await window.CustomerProfilesStore.loadAll();
+      } catch (e) {
+        console.warn('[ProtoGuide] Could not load customer profiles:', e);
+      }
+    }
+
+    grid.innerHTML = '';
+
+    customers.forEach(c => {
+      const card = document.createElement('div');
+      card.className = 'ai-setup-customer-card';
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+      card.dataset.customerId = c.id;
+      card.innerHTML = `
+        <span class="ai-setup-customer-name">${window.escapeHtml(c.company)}</span>
+        <span class="ai-setup-customer-industry">${window.escapeHtml(c.industry)}</span>
+        ${c.description ? `<span class="ai-setup-customer-description">${window.escapeHtml(c.description)}</span>` : ''}
+        <button class="ai-setup-customer-edit" type="button" title="Edit customer" aria-label="Edit ${window.escapeHtml(c.company)}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+        </button>
+      `;
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.ai-setup-customer-edit')) return;
+        selectCustomerCard(c.id);
+        if (window.sendEvent) window.sendEvent('Onboarding — selected company: ' + c.company);
+      });
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          selectCustomerCard(c.id);
+        }
+      });
+      card.querySelector('.ai-setup-customer-edit').addEventListener('click', (e) => {
+        e.stopPropagation();
+        clearMetaStartAutoScroll();
+        openCustomerSettingsModal();
+      });
+      grid.appendChild(card);
+    });
+
+    const addBtn = document.getElementById('ai-setup-add-customer-btn');
+    if (addBtn) {
+      addBtn.onclick = () => {
+        clearMetaStartAutoScroll();
+        openCustomerSettingsModal();
+      };
+    }
+
+    autoSelectPrevious(customers);
+  }
+
+  function initRoleSelection() {
+    document.querySelectorAll('.ai-setup-role-card').forEach(card => {
+      card.onclick = () => {
+        selectRoleCard(card.dataset.role);
+        if (window.sendEvent) window.sendEvent('Onboarding — selected role: ' + card.dataset.role);
+      };
+    });
+  }
+
+  function wireMetaStartContinue() {
+    const btn = document.getElementById('ai-setup-continue-btn');
+    if (!btn || btn.dataset.wired === 'true') return;
+    btn.dataset.wired = 'true';
+    btn.addEventListener('click', async () => {
+      if (!_selectedCustomerId || !_selectedRole) return;
+      if (window.AdminAssistant?.startWithSelection) {
+        await window.AdminAssistant.startWithSelection(_selectedCustomerId, _selectedRole);
+      }
+    });
+  }
+
+  async function refreshMetaStartScreen() {
+    const previousCustomerId = _selectedCustomerId;
+    const previousRole = _selectedRole;
+    await initMetaStartScreen();
+    if (previousCustomerId) {
+      const cards = document.querySelectorAll('.ai-setup-customer-card');
+      const stillExists = Array.from(cards).some(c => c.dataset.customerId === previousCustomerId);
+      if (stillExists) {
+        selectCustomerCard(previousCustomerId);
+      } else {
+        _selectedCustomerId = null;
+      }
+    }
+    if (previousRole) {
+      selectRoleCard(previousRole);
+    }
+    updateContinueButton();
+  }
+
+  // Expose meta-start functions on window for admin-assistant.js to call
+  window.initMetaStartScreen = initMetaStartScreen;
+  window.initRoleSelection = initRoleSelection;
+  window.wireMetaStartContinue = wireMetaStartContinue;
+  window.refreshMetaStartScreen = refreshMetaStartScreen;
+  window.clearMetaStartAutoScroll = clearMetaStartAutoScroll;
+
   // ── Settings Overlay Rendering ─────────────────────────────
 
   function renderSettingsOverlay() {
@@ -1623,18 +2348,18 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     var manageTeamsBtn = document.getElementById('settings-manage-teams');
     if (manageTeamsBtn) manageTeamsBtn.addEventListener('click', function() {
       closeSettingsModals();
-      postToPrototype({ type: 'guide:action', actionId: 'manage-teams' });
+      openTeamSettingsModal();
     });
 
     var resetOnboardingBtn = document.getElementById('settings-reset-onboarding');
     if (resetOnboardingBtn) resetOnboardingBtn.addEventListener('click', function() {
-      postToPrototype({ type: 'guide:action', actionId: 'reset-onboarding' });
+      if (window.performResetOnboarding) window.performResetOnboarding();
     });
 
     var resetAllBtn = document.getElementById('settings-reset-all');
     if (resetAllBtn) resetAllBtn.addEventListener('click', function() {
       if (confirm('Reset all prototype state? This cannot be undone.')) {
-        postToPrototype({ type: 'guide:action', actionId: 'reset-all' });
+        if (window.performResetAll) window.performResetAll();
       }
     });
 
@@ -1647,7 +2372,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     var manageCustomersBtn = document.getElementById('settings-manage-customers');
     if (manageCustomersBtn) manageCustomersBtn.addEventListener('click', function() {
       closeSettingsModals();
-      postToPrototype({ type: 'guide:action', actionId: 'edit-customers' });
+      openCustomerSettingsModal();
     });
 
     var signOutBtn = document.getElementById('settings-sign-out');
@@ -2096,6 +2821,187 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     });
   })();
 
+  // ── Prototype Walkthrough (migrated from app.js) ─────────
+  (function() {
+    const ONBOARDING_KEY = 'trengo_onboarding_done';
+    const AI_SETUP_MODE_KEY = 'trengo_ai_setup_mode';
+    const WALKTHROUGH_TITLE = 'Prototype Walkthrough';
+    const WALKTHROUGH_SUBTITLE = 'Internal only. Quick context for reviewers providing feedback.';
+    const ONBOARDING_STEPS = [
+      {
+        text: 'This prototype explores a customisable analytics model with five broadly applicable default sections. Focus feedback on the overall structure, logic, and decisions it supports.'
+      },
+      {
+        text: 'ProtoGuide \u2014 the panel on the right \u2014 answers concept questions and collects your feedback. Use the icons below its header for settings.'
+      },
+      {
+        text: 'The default navigation is only a starting point. The model is designed to be customised to each company\u2019s language, structure, and priorities. In edit mode, users can also add, remove, reorder, and resize charts.'
+      }
+    ];
+
+    let onboardingStep = 0;
+    const overlay       = document.getElementById('onboarding-overlay');
+    const stepsContainer = document.getElementById('onboarding-steps');
+    let onboardingBodyText = null;
+    let onboardingSkipBtn = null;
+    let onboardingNextBtn = null;
+    let onboardingDots = [];
+
+    function animateStepText() {
+      if (!onboardingBodyText) return;
+      onboardingBodyText.classList.remove('onboarding-step-text-enter');
+      void onboardingBodyText.offsetWidth;
+      onboardingBodyText.classList.add('onboarding-step-text-enter');
+    }
+
+    function updateControls() {
+      if (!onboardingSkipBtn || !onboardingNextBtn) return;
+      const isLastStep = onboardingStep === ONBOARDING_STEPS.length - 1;
+      onboardingSkipBtn.classList.toggle('hidden', isLastStep);
+      onboardingSkipBtn.disabled = isLastStep;
+      onboardingNextBtn.innerHTML = isLastStep
+        ? '<span class="onboarding-next-text">Done</span><svg class="onboarding-next-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+        : '<span class="onboarding-next-text">Next</span><svg class="onboarding-next-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>';
+    }
+
+    function updateDots() {
+      onboardingDots.forEach((dot, i) => {
+        dot.classList.toggle('active', i === onboardingStep);
+      });
+    }
+
+    function showStep(index, { animate = true } = {}) {
+      onboardingStep = index;
+      if (onboardingBodyText) {
+        onboardingBodyText.textContent = ONBOARDING_STEPS[index].text;
+        if (animate) animateStepText();
+        else onboardingBodyText.classList.remove('onboarding-step-text-enter');
+      }
+      updateControls();
+      updateDots();
+    }
+
+    function nextOnboardingStep() {
+      const nextIndex = onboardingStep + 1;
+      if (nextIndex >= ONBOARDING_STEPS.length) {
+        closeOnboarding();
+        return;
+      }
+      showStep(nextIndex);
+    }
+
+    function closeOnboarding() {
+      overlay.classList.add('closing');
+      localStorage.setItem(ONBOARDING_KEY, 'true');
+      setTimeout(() => {
+        overlay.style.display = 'none';
+        overlay.classList.remove('closing');
+        stepsContainer.innerHTML = '';
+        onboardingBodyText = null;
+        onboardingSkipBtn = null;
+        onboardingNextBtn = null;
+        onboardingDots = [];
+      }, 350);
+    }
+
+    function showOnboarding() {
+      stepsContainer.innerHTML = '';
+      const card = document.createElement('div');
+      card.className = 'onboarding-step-card';
+
+      const header = document.createElement('div');
+      header.className = 'onboarding-card-header';
+
+      const title = document.createElement('h2');
+      title.className = 'onboarding-title';
+      title.textContent = WALKTHROUGH_TITLE;
+
+      const subtitle = document.createElement('p');
+      subtitle.className = 'onboarding-subtitle';
+      subtitle.textContent = WALKTHROUGH_SUBTITLE;
+
+      header.appendChild(title);
+      header.appendChild(subtitle);
+      card.appendChild(header);
+
+      const bodyWrap = document.createElement('div');
+      bodyWrap.className = 'onboarding-step-body';
+
+      const bodyTextWrap = document.createElement('div');
+      bodyTextWrap.className = 'onboarding-step-text-wrap';
+
+      const body = document.createElement('p');
+      body.className = 'onboarding-step-text';
+      body.setAttribute('aria-live', 'polite');
+      bodyTextWrap.appendChild(body);
+      bodyWrap.appendChild(bodyTextWrap);
+      card.appendChild(bodyWrap);
+
+      const footer = document.createElement('div');
+      footer.className = 'onboarding-card-footer';
+
+      const dotsWrap = document.createElement('div');
+      dotsWrap.className = 'onboarding-dots';
+      onboardingDots = ONBOARDING_STEPS.map(() => {
+        const dot = document.createElement('div');
+        dot.className = 'onboarding-dot';
+        dotsWrap.appendChild(dot);
+        return dot;
+      });
+
+      const skipBtn = document.createElement('button');
+      skipBtn.className = 'onboarding-skip';
+      skipBtn.innerHTML = 'Skip intro <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+      skipBtn.addEventListener('click', closeOnboarding);
+
+      const nextBtn = document.createElement('button');
+      nextBtn.className = 'onboarding-next';
+      nextBtn.addEventListener('click', nextOnboardingStep);
+
+      footer.appendChild(dotsWrap);
+      footer.appendChild(skipBtn);
+      footer.appendChild(nextBtn);
+      card.appendChild(footer);
+
+      stepsContainer.appendChild(card);
+      onboardingBodyText = body;
+      onboardingSkipBtn = skipBtn;
+      onboardingNextBtn = nextBtn;
+      onboardingStep = 0;
+      overlay.classList.remove('closing');
+      overlay.style.display = 'block';
+      showStep(0, { animate: false });
+    }
+
+    function initOnboarding() {
+      if (localStorage.getItem(ONBOARDING_KEY)) return;
+      if (typeof AdminAssistant !== 'undefined' && localStorage.getItem(AI_SETUP_MODE_KEY) !== 'assistant') return;
+
+      const waitForReady = () => {
+        const analyticsPage = document.getElementById('analytics-page');
+        if (analyticsPage && analyticsPage.style.display !== 'none') {
+          const overviewContent = document.querySelector('.section-content[data-section="overview"]');
+          if (overviewContent && !overviewContent.classList.contains('loaded')) {
+            if (window.mountSection) window.mountSection('overview');
+          }
+          setTimeout(showOnboarding, 100);
+        } else {
+          setTimeout(waitForReady, 200);
+        }
+      };
+      setTimeout(waitForReady, 300);
+    }
+
+    window.triggerWalkthrough = function() {
+      localStorage.removeItem(ONBOARDING_KEY);
+      const overviewContent = document.querySelector('.section-content[data-section="overview"]');
+      if (overviewContent && !overviewContent.classList.contains('loaded') && window.mountSection) window.mountSection('overview');
+      setTimeout(showOnboarding, 300);
+    };
+
+    initOnboarding();
+  })();
+
   // ── Init ───────────────────────────────────────────────────
   (async function init() {
     setPanelState('chat');
@@ -2153,6 +3059,14 @@ All data in the prototype is randomly generated on each page load. KPI values, c
 
     // Chat is always enabled
     syncChatInputState(true);
+
+    // Pick up deferred meta-start init from AdminAssistant
+    if (window._pendingMetaStartInit) {
+      delete window._pendingMetaStartInit;
+      initMetaStartScreen();
+      initRoleSelection();
+      wireMetaStartContinue();
+    }
 
     // Welcome message
     addBubble("Hi! I'm ProtoGuide \u2014 ask me anything about this analytics prototype.", 'assistant');

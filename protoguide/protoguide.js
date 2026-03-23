@@ -1724,7 +1724,8 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       html += '<div id="domains-list">';
       (domainsData.domains || []).forEach(function(d) {
         html += '<div class="manage-row" style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f3f4f6;">';
-        html += '<span style="font-size:13px;">' + escapeHtml(d) + '</span>';
+        html += '<span style="font-size:13px;flex:1;">' + escapeHtml(d) + '</span>';
+        html += '<span class="mu-role-badge mu-role-viewer">viewer</span>';
         html += '<button class="remove-domain-btn" data-domain="' + escapeHtml(d) + '" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;">Remove</button>';
         html += '</div>';
       });

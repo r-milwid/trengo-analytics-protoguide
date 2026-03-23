@@ -7,7 +7,7 @@
    ============================================================ */
 
 const DashboardConfig = (() => {
-  const PROXY_URL = 'https://trengo-chatbot-proxy.prototype-companion.workers.dev';
+  const PROXY_URL = 'https://trengo-protoguide-proxy.prototype-companion.workers.dev';
   const LOCAL_STORAGE_KEY = 'trengo_dashboard_config';
   let _currentRevision = 0;
   let _saveTimer = null;

@@ -1,4 +1,4 @@
-name = "trengo-chatbot-proxy"
+name = "trengo-protoguide-proxy"
 main = "worker.js"
 compatibility_date = "2024-01-01"
 
@@ -12,4 +12,4 @@ id = "0c1e49948295435fac162f47ec0e6ec4"
 
 [[kv_namespaces]]
 binding = "PROTOGUIDE_AUTH"
-id = "REPLACE_WITH_ACTUAL_KV_ID"
+id = "6c2b3b43b5c8444990176970ae976b21"

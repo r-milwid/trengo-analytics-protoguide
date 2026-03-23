@@ -15,7 +15,7 @@
 
 const AdminAssistant = (() => {
   // ── Constants ──────────────────────────────────────────────
-  const PROXY_URL = 'https://trengo-chatbot-proxy.prototype-companion.workers.dev';
+  const PROXY_URL = 'https://trengo-protoguide-proxy.prototype-companion.workers.dev';
   const MAX_LOOP_ITERATIONS = 10;
   const AI_SETUP_MODE_KEY = 'trengo_ai_setup_mode'; // 'onboarding' | 'assistant' | null
   const THREAD_REVEAL_DELAY_MS = 1200;

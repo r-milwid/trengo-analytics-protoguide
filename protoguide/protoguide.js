@@ -9,8 +9,8 @@
 
   // ── Configuration ──────────────────────────────────────────
   const CHATBOT_PROXY = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-    ? 'https://trengo-chatbot-proxy.prototype-companion.workers.dev'
-    : 'https://trengo-chatbot-proxy.prototype-companion.workers.dev';
+    ? 'https://trengo-protoguide-proxy.prototype-companion.workers.dev'
+    : 'https://trengo-protoguide-proxy.prototype-companion.workers.dev';
 
   // ── Auth (client-side Google Identity Services) ────────────
   const ROLE_LEVELS = { viewer: 0, admin: 1 };

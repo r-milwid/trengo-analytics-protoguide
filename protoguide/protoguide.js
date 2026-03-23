@@ -1737,16 +1737,37 @@ All data in the prototype is randomly generated on each page load. KPI values, c
 
       // Users section
       html += '<div class="manage-section" style="margin-top:20px;">';
-      html += '<h4 style="margin:0 0 8px;font-size:13px;font-weight:600;color:#374151;">Users</h4>';
-      html += '<div id="users-list">';
+      html += '<h4 class="mu-section-title">Users</h4>';
+
+      // Add user form (matching SideCar style)
+      html += '<div class="mu-add-form">';
+      html += '<input type="email" id="mu-add-email" class="mu-input" placeholder="user@example.com">';
+      html += '<select id="mu-add-role" class="mu-input mu-role-select"><option value="viewer">Viewer</option><option value="admin">Admin</option></select>';
+      html += '<button class="mu-add-btn" id="mu-add-btn">Add</button>';
+      html += '</div>';
+
+      // User list
+      html += '<div class="mu-user-list" id="users-list">';
+      var currentEmail = (currentUser && currentUser.email) || '';
+      var seedEmail = 'rmilwid@gmail.com';
       (usersData.users || []).forEach(function(u) {
-        html += '<div class="manage-row" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f3f4f6;">';
-        html += '<span style="font-size:13px;flex:1;">' + escapeHtml(u.email) + '</span>';
-        html += '<select class="user-role-select" data-email="' + escapeHtml(u.email) + '" style="padding:4px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;margin-right:8px;">';
-        html += '<option value="viewer"' + (u.role === 'viewer' ? ' selected' : '') + '>Viewer</option>';
-        html += '<option value="admin"' + (u.role === 'admin' ? ' selected' : '') + '>Admin</option>';
-        html += '</select>';
-        html += '<button class="remove-user-btn" data-email="' + escapeHtml(u.email) + '" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;">Remove</button>';
+        var isSelf = u.email.toLowerCase() === currentEmail.toLowerCase();
+        var isSeed = u.email.toLowerCase() === seedEmail.toLowerCase();
+        html += '<div class="mu-user-row">';
+        html += '<span class="mu-user-email">' + escapeHtml(u.email) + '</span>';
+        if (isSeed) {
+          html += '<span class="mu-role-badge mu-role-owner">owner</span>';
+          if (isSelf) html += '<span class="mu-you-badge">you</span>';
+        } else if (isSelf) {
+          html += '<span class="mu-role-badge mu-role-' + escapeHtml(u.role) + '">' + escapeHtml(u.role) + '</span>';
+          html += '<span class="mu-you-badge">you</span>';
+        } else {
+          html += '<select class="mu-inline-role mu-role-' + escapeHtml(u.role) + '" data-role-email="' + escapeHtml(u.email) + '">';
+          html += '<option value="viewer"' + (u.role === 'viewer' ? ' selected' : '') + '>Viewer</option>';
+          html += '<option value="admin"' + (u.role === 'admin' ? ' selected' : '') + '>Admin</option>';
+          html += '</select>';
+          html += '<button class="mu-remove-btn" data-remove-email="' + escapeHtml(u.email) + '" title="Remove user">&times;</button>';
+        }
         html += '</div>';
       });
       html += '</div>';
@@ -1773,16 +1794,35 @@ All data in the prototype is randomly generated on each page load. KPI values, c
         });
       }
 
-      body.querySelectorAll('.user-role-select').forEach(function(sel) {
+      // Wire add user button
+      var addUserBtn = body.querySelector('#mu-add-btn');
+      if (addUserBtn) {
+        addUserBtn.addEventListener('click', async function() {
+          var email = body.querySelector('#mu-add-email').value.trim();
+          var role = body.querySelector('#mu-add-role').value;
+          if (!email) return;
+          addUserBtn.disabled = true;
+          try {
+            await fetch(CHATBOT_PROXY + '/protoguide/users', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ email: email, role: role }) });
+            openManageUsersModal(); // refresh
+          } catch(e) {
+            addUserBtn.disabled = false;
+          }
+        });
+      }
+
+      // Wire role change dropdowns
+      body.querySelectorAll('.mu-inline-role[data-role-email]').forEach(function(sel) {
         sel.addEventListener('change', async function() {
-          await fetch(CHATBOT_PROXY + '/protoguide/users', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ email: sel.dataset.email, role: sel.value }) });
+          await fetch(CHATBOT_PROXY + '/protoguide/users', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ email: sel.dataset.roleEmail, role: sel.value }) });
         });
       });
 
-      body.querySelectorAll('.remove-user-btn').forEach(function(btn) {
+      // Wire remove user buttons
+      body.querySelectorAll('.mu-remove-btn[data-remove-email]').forEach(function(btn) {
         btn.addEventListener('click', async function() {
-          if (!confirm('Remove ' + btn.dataset.email + '?')) return;
-          await fetch(CHATBOT_PROXY + '/protoguide/users/' + encodeURIComponent(btn.dataset.email), { method: 'DELETE', headers: getAuthHeaders() });
+          if (!confirm('Remove ' + btn.dataset.removeEmail + '?')) return;
+          await fetch(CHATBOT_PROXY + '/protoguide/users/' + encodeURIComponent(btn.dataset.removeEmail), { method: 'DELETE', headers: getAuthHeaders() });
           openManageUsersModal(); // refresh
         });
       });

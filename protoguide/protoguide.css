@@ -1913,6 +1913,11 @@ body[data-panel="wide"] .modal-overlay { right: calc(var(--panel-wide-w) + 30px)
   color: #92400e;
 }
 
+.mu-role-admin {
+  background: var(--panel-accent-soft);
+  color: var(--panel-accent-strong);
+}
+
 /* Pending user row */
 .mu-user-pending {
   background: rgba(251, 191, 36, 0.08);

@@ -1743,8 +1743,8 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       });
       html += '</div>';
       html += '<div style="display:flex;gap:8px;margin-top:8px;">';
-      html += '<input type="text" id="new-domain-input" placeholder="e.g. company.com" style="flex:1;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">';
-      html += '<button id="add-domain-btn" style="padding:6px 12px;background:#374151;color:#fff;border:none;border-radius:6px;font-size:13px;cursor:pointer;">Add</button>';
+      html += '<input type="text" id="new-domain-input" class="mu-input" placeholder="e.g. company.com">';
+      html += '<button id="add-domain-btn" class="mu-add-btn">Add</button>';
       html += '</div>';
       html += '</div>';
 

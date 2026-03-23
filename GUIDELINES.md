@@ -1,21 +1,25 @@
 # Project Guidelines
 
-## What Belongs Here
-Project-specific constraints, conventions, and decisions. Rules that only apply to this codebase.
-Examples: testing practices, architectural patterns, naming conventions, specific tech choices.
+## This Is a Prototype
 
-**This file is version-controlled.** Keep it current — no stale entries.
+Speed and demo quality over robustness. Shortcuts are fine. Large files are fine. Global state is fine. The bar is: does it work well enough to demonstrate the concept to stakeholders?
 
----
+## Hard Rules (even for prototypes)
 
-## Rules
-- Write tests alongside implementation for any logic changes
-- After ANY correction or non-obvious decision: update this file
-- Review this file and `ARCHITECTURE.md` at session start
+- **Vanilla JS only** — no React, Vue, or any framework. No build step. CDN imports only (Chart.js, Google Fonts).
+- **No hardcoded secrets** — API keys go in the Worker's wrangler.toml or Cloudflare secrets, never in client-side code.
+- **Keep ARCHITECTURE.md current** — when you change how major components work or add new ones, run `/update-docs ARCHITECTURE.md`.
+- **After corrections** — when something is corrected or a non-obvious decision is made, note it in this file under Decisions & Patterns.
+
+## ProtoGuide Integration
+
+ProtoGuide lives in `protoguide/` and calls `window._prototypeGuideAPI` directly (no iframe, no postMessage). The analytics app exposes settings/admin data via this API object. ProtoGuide auth uses Google Identity Services with Bearer tokens stored in localStorage.
 
 ## Available Skills
-- `/architecture` — loads current architecture context on demand (auto-invocable)
-- `/update-docs [filename]` — enforced procedure for maintaining docs (user-invoked only)
+
+- `/architecture` — loads ARCHITECTURE.md snapshot for design questions (auto-invocable)
+- `/update-docs [filename]` — enforced read-first-then-rewrite procedure for maintaining docs (user-invoked)
+- `/self-review` — lightweight pre-commit check for prototypes (user-invoked)
 
 ## Decisions & Patterns
-<!-- Project-specific knowledge. Rewrite sections to reflect current state — never append like a log. -->
+<!-- When something is corrected or a non-obvious decision is made, rewrite this section to reflect it. Current-state only — no changelog. -->

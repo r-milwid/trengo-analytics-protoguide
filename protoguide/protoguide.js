@@ -1540,29 +1540,13 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     html += '<div class="guide-toggle-track' + (settingsData.anchorsNavUser ? ' active' : '') + '" id="settings-anchors-toggle" data-toggle-key="anchorsNavUser"></div>';
     html += '</div></div>';
 
-    // Configure Thresholds (from admin)
+    // Configure Thresholds button (opens modal)
     if (adminData) {
       html += '<div class="guide-popout-divider"></div>';
-      html += '<div class="guide-setting-block"><div class="guide-setting-header">Decision Thresholds</div>';
-      var sliderKeys = ['confidenceSkipSourceGathering','confidenceSkipTeamConfirmation','confidenceSkipDecisionGoals','confidenceSkipSignalFollowup','confidenceAutoDraft','confidenceSkipDensity','correctionSensitivity'];
-      var sliderLabels = {
-        confidenceSkipSourceGathering: 'Skip source gathering',
-        confidenceSkipTeamConfirmation: 'Skip team confirmation',
-        confidenceSkipDecisionGoals: 'Skip decision goals',
-        confidenceSkipSignalFollowup: 'Skip signal follow-up',
-        confidenceAutoDraft: 'Auto-draft config',
-        confidenceSkipDensity: 'Skip density question',
-        correctionSensitivity: 'Correction sensitivity'
-      };
-      sliderKeys.forEach(function(key) {
-        var val = adminData[key] !== undefined ? adminData[key] : 5;
-        html += '<div class="guide-setting-block">';
-        html += '<div class="guide-setting-header">' + (sliderLabels[key] || key) + '</div>';
-        html += '<div class="guide-slider-wrapper">';
-        html += '<input type="range" class="guide-slider" data-slider-key="' + key + '" min="0" max="10" step="1" value="' + val + '">';
-        html += '<div class="guide-slider-labels"><span>0</span><span class="guide-slider-value" data-slider-display="' + key + '">' + val + '</span><span>10</span></div>';
-        html += '</div></div>';
-      });
+      html += '<div class="guide-setting-block">';
+      html += '<div class="guide-setting-header">Decision Thresholds</div>';
+      html += '<div class="guide-setting-subtext">Confidence thresholds that control onboarding agent decisions</div>';
+      html += '<button class="guide-action-btn" id="settings-configure-thresholds">Configure Thresholds</button>';
       html += '</div>';
     }
 
@@ -1603,15 +1587,10 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       postToPrototype({ type: 'guide:set-toggle', key: 'anchorsNavUser', checked: anchorsToggle.classList.contains('active') });
     });
 
-    // Wire sliders
-    body.querySelectorAll('.guide-slider[data-slider-key]').forEach(function(slider) {
-      var display = body.querySelector('.guide-slider-value[data-slider-display="' + slider.dataset.sliderKey + '"]');
-      slider.addEventListener('input', function() {
-        if (display) display.textContent = slider.value;
-      });
-      slider.addEventListener('change', function() {
-        postToPrototype({ type: 'guide:set-slider', key: slider.dataset.sliderKey, value: parseFloat(slider.value) });
-      });
+    // Wire configure thresholds button
+    var thresholdsBtn = document.getElementById('settings-configure-thresholds');
+    if (thresholdsBtn) thresholdsBtn.addEventListener('click', function() {
+      openThresholdsModal();
     });
 
     var manageTeamsBtn = document.getElementById('settings-manage-teams');
@@ -1643,6 +1622,80 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       localStorage.removeItem('protoguide_token');
       window.location.href = 'protoguide-login.html';
     });
+  }
+
+  // ── Decision Thresholds Modal ─────────────────────────────
+
+  var fieldGroupModal = document.getElementById('field-group-modal');
+  var fieldGroupModalClose = document.getElementById('field-group-modal-close');
+
+  if (fieldGroupModalClose) {
+    fieldGroupModalClose.addEventListener('click', function() {
+      if (fieldGroupModal) fieldGroupModal.style.display = 'none';
+    });
+  }
+  if (fieldGroupModal) {
+    fieldGroupModal.addEventListener('click', function(e) {
+      if (e.target === fieldGroupModal) fieldGroupModal.style.display = 'none';
+    });
+  }
+
+  function openThresholdsModal() {
+    if (!fieldGroupModal) return;
+    var api = window._prototypeGuideAPI;
+    if (!api) return;
+    var adminData = api.getAdminData();
+    if (!adminData) return;
+
+    var title = document.getElementById('field-group-modal-title');
+    var body = document.getElementById('field-group-modal-body');
+    if (title) {
+      title.innerHTML = 'Decision Thresholds';
+      title.innerHTML += '<div class="field-group-modal-subtext">Confidence thresholds that control onboarding agent decisions</div>';
+    }
+    if (!body) return;
+
+    var sliders = [
+      { key: 'confidenceSkipSourceGathering', label: 'Source gathering', description: 'Skip gathering sources when confidence is high enough', minLabel: 'None', maxLabel: 'Max' },
+      { key: 'confidenceSkipTeamConfirmation', label: 'Team confirmation', description: 'Skip confirming team assignment when confident', minLabel: 'None', maxLabel: 'Max' },
+      { key: 'confidenceSkipDecisionGoals', label: 'Decision goals', description: 'Skip decision goal prompts when confident', minLabel: 'None', maxLabel: 'Max' },
+      { key: 'confidenceSkipSignalFollowup', label: 'Signal follow-up', description: 'Skip signal follow-up when confident', minLabel: 'None', maxLabel: 'Max' },
+      { key: 'confidenceAutoDraft', label: 'Auto-draft', description: 'Auto-draft configuration when confident', minLabel: 'None', maxLabel: 'Max' },
+      { key: 'confidenceSkipDensity', label: 'Density question', description: 'Skip density question when confident', minLabel: 'None', maxLabel: 'Max' },
+      { key: 'correctionSensitivity', label: 'Correction sensitivity', description: 'How aggressively the agent corrects itself', minLabel: 'Off', maxLabel: 'All' }
+    ];
+
+    var html = '';
+    sliders.forEach(function(child) {
+      var val = adminData[child.key] !== undefined ? adminData[child.key] : 5;
+      html += '<div class="guide-compact-slider-row">';
+      html += '<div class="guide-compact-slider-label">';
+      html += '<span>' + child.label + '</span>';
+      if (child.description) html += '<span class="guide-info-icon" data-tooltip="' + child.description + '">ⓘ</span>';
+      html += '</div>';
+      html += '<div class="guide-compact-slider-control">';
+      html += '<span class="guide-slider-endpoint">' + child.minLabel + '</span>';
+      html += '<input type="range" class="guide-slider" data-slider-key="' + child.key + '" min="0" max="10" step="1" value="' + val + '">';
+      html += '<span class="guide-slider-endpoint">' + child.maxLabel + '</span>';
+      html += '<span class="guide-slider-value" data-slider-display="' + child.key + '">' + val + '</span>';
+      html += '</div>';
+      html += '</div>';
+    });
+
+    body.innerHTML = html;
+
+    // Wire sliders
+    body.querySelectorAll('.guide-slider[data-slider-key]').forEach(function(slider) {
+      var display = body.querySelector('.guide-slider-value[data-slider-display="' + slider.dataset.sliderKey + '"]');
+      slider.addEventListener('input', function() {
+        if (display) display.textContent = slider.value;
+      });
+      slider.addEventListener('change', function() {
+        postToPrototype({ type: 'guide:set-slider', key: slider.dataset.sliderKey, value: parseFloat(slider.value) });
+      });
+    });
+
+    fieldGroupModal.style.display = 'flex';
   }
 
   // ── Manage Users Modal ────────────────────────────────────

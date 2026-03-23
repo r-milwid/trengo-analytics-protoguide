@@ -1,5 +1,7 @@
 import { handleAnalyticsQuery } from './analytics-query.js';
 
+const SEED_EMAIL = 'rmilwid@gmail.com';
+
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
@@ -193,6 +195,10 @@ export default {
         return json({ error: 'Invalid email or role' }, 400);
       }
 
+      if (email.toLowerCase() === SEED_EMAIL && role !== 'admin') {
+        return json({ error: 'Cannot change role of seed admin' }, 403);
+      }
+
       const users = await env.PROTOGUIDE_AUTH.get('users', 'json') || {};
       users[email] = { role, createdAt: users[email]?.createdAt || new Date().toISOString() };
       await env.PROTOGUIDE_AUTH.put('users', JSON.stringify(users));
@@ -206,6 +212,10 @@ export default {
 
       const emailParam = decodeURIComponent(path.split('/protoguide/users/')[1]);
       if (!emailParam) return json({ error: 'missing email' }, 400);
+
+      if (emailParam.toLowerCase() === SEED_EMAIL) {
+        return json({ error: 'Cannot delete seed admin' }, 403);
+      }
 
       const users = await env.PROTOGUIDE_AUTH.get('users', 'json') || {};
       delete users[emailParam];

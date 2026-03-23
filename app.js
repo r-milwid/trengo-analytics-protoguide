@@ -5,6 +5,11 @@
 // DEFAULT_TABS, WIDGETS, WIDGET_BY_ID, TEAMS_DATA, getSectionForWidget
 // are defined in widget-catalog.js (loaded before this file)
 
+// ── sendEvent stub (replaces guide-adapter.js iframe messaging) ──
+if (typeof window.sendEvent !== 'function') {
+  window.sendEvent = function () { /* no-op: ProtoGuide doesn't use iframe messaging */ };
+}
+
 // ── STATE ──────────────────────────────────────────────────────
 const state = {
   currentView: 'landing', // 'landing' | 'analytics'
@@ -734,12 +739,13 @@ function readStoredCustomerProfiles() {
 
 async function seedCustomerProfilesFromFixtures() {
   try {
-    const resp = await fetch('mock-customers/index.json');
+    const base = document.querySelector('script[src*="app.js"]')?.src.replace(/app\.js.*$/, '') || '';
+    const resp = await fetch(base + 'mock-customers/index.json');
     const indexData = await resp.json();
     const entries = Array.isArray(indexData?.customers) ? indexData.customers : [];
     const profiles = await Promise.all(entries.map(async (entry, index) => {
       try {
-        const fileResp = await fetch(`mock-customers/${entry.file}`);
+        const fileResp = await fetch(`${base}mock-customers/${entry.file}`);
         const fileData = await fileResp.json();
         return normalizeCustomerProfile({ ...entry, ...fileData }, index);
       } catch {

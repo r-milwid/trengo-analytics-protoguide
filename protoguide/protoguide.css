@@ -1040,6 +1040,14 @@ body[data-panel="bar"] .ai-panel-inner {
   background: rgba(255,255,255,0.9);
   border-color: rgba(145, 157, 111, 0.5);
 }
+.guide-action-btn--danger {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.25);
+}
+.guide-action-btn--danger:hover {
+  background: rgba(185, 28, 28, 0.06);
+  border-color: rgba(185, 28, 28, 0.4);
+}
 .guide-action-row {
   display: flex;
   gap: 8px;

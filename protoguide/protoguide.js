@@ -1525,23 +1525,25 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     let html = '';
 
     // Role selector
-    html += '<div class="guide-popout-section">';
-    html += '<label class="guide-popout-label">Dashboard Role</label>';
-    html += '<select class="guide-popout-select" id="settings-role-select">';
+    html += '<div class="guide-setting-block">';
+    html += '<div class="guide-setting-header">Dashboard Role</div>';
+    html += '<div class="guide-role-toggle">';
     (settingsData.role.options || []).forEach(function(opt) {
-      html += '<option value="' + opt.value + '"' + (opt.value === settingsData.role.current ? ' selected' : '') + '>' + opt.label + '</option>';
+      var active = opt.value === settingsData.role.current ? ' active' : '';
+      html += '<button class="guide-role-btn' + active + '" data-role="' + opt.value + '">' + opt.label + '</button>';
     });
-    html += '</select></div>';
+    html += '</div></div>';
 
     // Anchors nav toggle
-    html += '<div class="guide-popout-section">';
-    html += '<label class="guide-popout-label"><input type="checkbox" id="settings-anchors-toggle"' + (settingsData.anchorsNavUser ? ' checked' : '') + '> Anchors navigation</label>';
-    html += '</div>';
+    html += '<div class="guide-setting-block"><div class="guide-toggle-wrapper">';
+    html += '<div class="guide-setting-header">Anchors navigation</div>';
+    html += '<div class="guide-toggle-track' + (settingsData.anchorsNavUser ? ' active' : '') + '" id="settings-anchors-toggle" data-toggle-key="anchorsNavUser"></div>';
+    html += '</div></div>';
 
     // Configure Thresholds (from admin)
     if (adminData) {
       html += '<div class="guide-popout-divider"></div>';
-      html += '<div class="guide-popout-section"><label class="guide-popout-label">Decision Thresholds</label>';
+      html += '<div class="guide-setting-block"><div class="guide-setting-header">Decision Thresholds</div>';
       var sliderKeys = ['confidenceSkipSourceGathering','confidenceSkipTeamConfirmation','confidenceSkipDecisionGoals','confidenceSkipSignalFollowup','confidenceAutoDraft','confidenceSkipDensity','correctionSensitivity'];
       var sliderLabels = {
         confidenceSkipSourceGathering: 'Skip source gathering',
@@ -1554,50 +1556,60 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       };
       sliderKeys.forEach(function(key) {
         var val = adminData[key] !== undefined ? adminData[key] : 5;
-        html += '<div class="guide-popout-slider-row">';
-        html += '<span class="guide-popout-slider-label">' + (sliderLabels[key] || key) + '</span>';
-        html += '<input type="range" class="guide-popout-slider" data-slider-key="' + key + '" min="0" max="10" step="1" value="' + val + '">';
-        html += '<span class="guide-popout-slider-value">' + val + '</span>';
-        html += '</div>';
+        html += '<div class="guide-setting-block">';
+        html += '<div class="guide-setting-header">' + (sliderLabels[key] || key) + '</div>';
+        html += '<div class="guide-slider-wrapper">';
+        html += '<input type="range" class="guide-slider" data-slider-key="' + key + '" min="0" max="10" step="1" value="' + val + '">';
+        html += '<div class="guide-slider-labels"><span>0</span><span class="guide-slider-value" data-slider-display="' + key + '">' + val + '</span><span>10</span></div>';
+        html += '</div></div>';
       });
       html += '</div>';
     }
 
     // Actions
     html += '<div class="guide-popout-divider"></div>';
-    html += '<button class="guide-action-btn" id="settings-manage-teams">Manage Teams</button>';
-    html += '<button class="guide-action-btn" id="settings-reset-onboarding">Reset Onboarding</button>';
-    html += '<button class="guide-action-btn guide-action-btn--danger" id="settings-reset-all">Reset Everything</button>';
+    html += '<div class="guide-setting-block"><button class="guide-action-btn" id="settings-manage-teams">Manage Teams</button></div>';
+    html += '<div class="guide-setting-block"><button class="guide-action-btn" id="settings-reset-onboarding">Reset Onboarding</button></div>';
+    html += '<div class="guide-setting-block"><button class="guide-action-btn guide-action-btn--danger" id="settings-reset-all">Reset Everything</button></div>';
 
     // Manage Users (admin only)
     if (currentUser && hasMinRole(currentUser.role, 'admin')) {
       html += '<div class="guide-popout-divider"></div>';
-      html += '<button class="guide-action-btn" id="settings-manage-users">Manage Users</button>';
+      html += '<div class="guide-setting-block"><button class="guide-action-btn" id="settings-manage-users">Manage Users</button></div>';
     }
 
     // Sign out
     html += '<div class="guide-popout-divider"></div>';
-    html += '<div class="guide-popout-section">';
-    html += '<span class="guide-popout-email">' + (currentUser ? currentUser.email : '') + '</span>';
-    html += '<button class="guide-action-btn" id="settings-sign-out">Sign Out</button>';
+    html += '<div class="guide-setting-block guide-signout-block">';
+    html += '<div class="guide-signout-email">' + (currentUser ? currentUser.email : '') + '</div>';
+    html += '<button class="guide-action-btn guide-signout-btn" id="settings-sign-out">Sign Out</button>';
     html += '</div>';
 
     body.innerHTML = html;
 
-    // Wire events
-    var roleSelect = document.getElementById('settings-role-select');
-    if (roleSelect) roleSelect.addEventListener('change', function() {
-      postToPrototype({ type: 'guide:set-role', role: roleSelect.value });
+    // Wire role toggle buttons
+    body.querySelectorAll('.guide-role-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        body.querySelectorAll('.guide-role-btn').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        postToPrototype({ type: 'guide:set-role', role: btn.dataset.role });
+      });
     });
 
+    // Wire anchors toggle track
     var anchorsToggle = document.getElementById('settings-anchors-toggle');
-    if (anchorsToggle) anchorsToggle.addEventListener('change', function() {
-      postToPrototype({ type: 'guide:set-toggle', key: 'anchorsNavUser', checked: anchorsToggle.checked });
+    if (anchorsToggle) anchorsToggle.addEventListener('click', function() {
+      anchorsToggle.classList.toggle('active');
+      postToPrototype({ type: 'guide:set-toggle', key: 'anchorsNavUser', checked: anchorsToggle.classList.contains('active') });
     });
 
-    body.querySelectorAll('.guide-popout-slider').forEach(function(slider) {
+    // Wire sliders
+    body.querySelectorAll('.guide-slider[data-slider-key]').forEach(function(slider) {
+      var display = body.querySelector('.guide-slider-value[data-slider-display="' + slider.dataset.sliderKey + '"]');
       slider.addEventListener('input', function() {
-        slider.nextElementSibling.textContent = slider.value;
+        if (display) display.textContent = slider.value;
+      });
+      slider.addEventListener('change', function() {
         postToPrototype({ type: 'guide:set-slider', key: slider.dataset.sliderKey, value: parseFloat(slider.value) });
       });
     });

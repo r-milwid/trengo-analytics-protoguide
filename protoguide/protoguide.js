@@ -1505,6 +1505,20 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     _previousPanelState = null;
   }
 
+  // Close modals opened from settings (without closing settings itself)
+  function closeSettingsModals() {
+    var ids = [
+      'manage-users-modal-overlay',
+      'team-settings-modal-overlay',
+      'customer-settings-modal-overlay',
+      'field-group-modal'
+    ];
+    ids.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+  }
+
   // Settings overlay
   if (settingsBtn) {
     settingsBtn.addEventListener('click', () => {
@@ -1602,11 +1616,13 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     // Wire configure thresholds button
     var thresholdsBtn = document.getElementById('settings-configure-thresholds');
     if (thresholdsBtn) thresholdsBtn.addEventListener('click', function() {
+      closeSettingsModals();
       openThresholdsModal();
     });
 
     var manageTeamsBtn = document.getElementById('settings-manage-teams');
     if (manageTeamsBtn) manageTeamsBtn.addEventListener('click', function() {
+      closeSettingsModals();
       postToPrototype({ type: 'guide:action', actionId: 'manage-teams' });
     });
 
@@ -1624,12 +1640,13 @@ All data in the prototype is randomly generated on each page load. KPI values, c
 
     var manageUsersBtn = document.getElementById('settings-manage-users');
     if (manageUsersBtn) manageUsersBtn.addEventListener('click', function() {
-      closeAllOverlays();
+      closeSettingsModals();
       openManageUsersModal();
     });
 
     var manageCustomersBtn = document.getElementById('settings-manage-customers');
     if (manageCustomersBtn) manageCustomersBtn.addEventListener('click', function() {
+      closeSettingsModals();
       postToPrototype({ type: 'guide:action', actionId: 'edit-customers' });
     });
 

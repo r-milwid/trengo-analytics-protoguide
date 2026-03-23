@@ -1943,7 +1943,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       var ulBtn = body.querySelector('#customer-settings-upload-btn');
       if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Analyzing ' + file.name + '\u2026'; }
       if (ulBtn) ulBtn.disabled = true;
-      window.AdminAssistant.analyzeFileForCustomer(file).then(function(profile) {
+      AdminAssistant.analyzeFileForCustomer(file).then(function(profile) {
         _addCustomerDraft = Object.assign({}, window.CustomerProfilesStore.createBlank(), {
           company: profile.company || '',
           industry: profile.industry || '',
@@ -2142,8 +2142,8 @@ All data in the prototype is randomly generated on each page load. KPI values, c
   }
 
   function autoSelectPrevious(customers) {
-    if (!window.AssistantStorage) return;
-    const active = window.AssistantStorage.getActiveSession();
+    if (typeof AssistantStorage === 'undefined') return;
+    const active = AssistantStorage.getActiveSession();
     if (!active.customerId && !active.role) return;
 
     if (active.customerId && customers.some(c => c.id === active.customerId)) {
@@ -2231,8 +2231,8 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     btn.dataset.wired = 'true';
     btn.addEventListener('click', async () => {
       if (!_selectedCustomerId || !_selectedRole) return;
-      if (window.AdminAssistant?.startWithSelection) {
-        await window.AdminAssistant.startWithSelection(_selectedCustomerId, _selectedRole);
+      if (typeof AdminAssistant !== 'undefined' && AdminAssistant.startWithSelection) {
+        await AdminAssistant.startWithSelection(_selectedCustomerId, _selectedRole);
       }
     });
   }

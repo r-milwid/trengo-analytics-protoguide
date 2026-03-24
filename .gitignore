@@ -4,3 +4,10 @@
 
 # Optional: ephemeral task tracking (comment out if you want to commit tasks)
 # tasks/todo.md
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example

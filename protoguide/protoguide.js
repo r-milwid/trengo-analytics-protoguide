@@ -2632,6 +2632,72 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     });
   });
 
+  async function fetchFeedbackSummary() {
+    try {
+      var resp = await fetch(CHATBOT_PROXY + '/protoguide/feedback/summary', { headers: getAuthHeaders() });
+      if (resp.ok) {
+        var data = await resp.json();
+        return data.summaries || null;
+      }
+    } catch (e) {
+      console.error('Failed to fetch feedback summaries:', e);
+    }
+    return null;
+  }
+
+  // Cache raw submissions keyed by id so summary view can show sources
+  var _rawSubmissionsById = {};
+
+  function renderFeedbackSummary(summaryData, rawItems) {
+    if (!summaryData || !summaryData.categories || !summaryData.categories.length) {
+      return null; // signal to fall back to raw
+    }
+    // Index raw items by id for evidence lookup
+    if (rawItems) {
+      rawItems.forEach(function (item) { if (item.id) _rawSubmissionsById[item.id] = item; });
+    }
+    var html = '';
+    summaryData.categories.forEach(function (cat) {
+      html += '<div class="feedback-summary-category">';
+      html += '<h4 class="feedback-summary-category-name">' + escapeHtml(cat.name) + '</h4>';
+      cat.items.forEach(function (item) {
+        var itemId = item.id || '';
+        html += '<div class="feedback-summary-item" data-summary-id="' + escapeHtml(itemId) + '">';
+        html += '<div class="feedback-summary-item-header">';
+        html += '<span class="feedback-summary-text">' + escapeHtml(item.summary) + '</span>';
+        if (item.reportCount > 1) {
+          html += '<span class="feedback-report-count">\u00d7' + item.reportCount + '</span>';
+        }
+        html += '</div>';
+        if (item.evidenceIds && item.evidenceIds.length > 0) {
+          html += '<button class="feedback-summary-toggle" data-evidence="' + escapeHtml(JSON.stringify(item.evidenceIds)) + '">' + item.evidenceIds.length + ' report' + (item.evidenceIds.length !== 1 ? 's' : '') + ' \u25b8</button>';
+          html += '<div class="feedback-summary-sources" style="display:none;">';
+          item.evidenceIds.forEach(function (eid) {
+            var raw = _rawSubmissionsById[eid];
+            if (!raw) return;
+            var rawText = raw.text || raw.rawText || raw.raw_text || '';
+            html += '<div class="feedback-item" data-id="' + escapeHtml(eid) + '">';
+            html += '<div class="feedback-item-header">';
+            html += feedbackBadges(raw);
+            html += feedbackActions(eid, raw.type || 'product');
+            html += '</div>';
+            html += formatFeedbackText(rawText);
+            var name = raw.submitterName || raw.submitter_name;
+            if (name) html += '<div class="feedback-item-submitter">' + escapeHtml(name) + '</div>';
+            html += '</div>';
+          });
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+    });
+    if (summaryData.updatedAt) {
+      html += '<div class="feedback-summary-updated">Last organized: ' + new Date(summaryData.updatedAt).toLocaleString() + '</div>';
+    }
+    return html;
+  }
+
   async function loadFeedbackInsights() {
     const loading = document.getElementById('insights-loading');
     const empty = document.getElementById('insights-empty');
@@ -2642,33 +2708,49 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     if (content) content.style.display = 'none';
 
     try {
-      const allSubmissions = await fetchFeedback();
+      // Fetch summaries and raw submissions in parallel
+      var [summaries, allSubmissions] = await Promise.all([
+        fetchFeedbackSummary(),
+        fetchFeedback()
+      ]);
 
-      if (!allSubmissions.length) {
+      if ((!summaries || (!summaries.product && !summaries.bugs && !summaries.corrections)) && !allSubmissions.length) {
         if (loading) loading.style.display = 'none';
         if (empty) empty.style.display = '';
         return;
       }
 
-      const grouped = { product: [], bugs: [], corrections: [] };
-      allSubmissions.forEach(s => {
+      var productBody = document.getElementById('insights-product-body');
+      var bugsBody = document.getElementById('insights-bugs-body');
+      var correctionsBody = document.getElementById('insights-corrections-body');
+
+      // Group raw submissions for fallback and evidence lookups
+      var grouped = { product: [], bugs: [], corrections: [] };
+      allSubmissions.forEach(function (s) {
         if (s.deleted) return;
         if (s.type === 'bug') grouped.bugs.push(s);
         else if (s.type === 'correction') grouped.corrections.push(s);
         else grouped.product.push(s);
       });
 
-      var productBody = document.getElementById('insights-product-body');
-      var bugsBody = document.getElementById('insights-bugs-body');
-      var correctionsBody = document.getElementById('insights-corrections-body');
+      // Try organized summaries first, fall back to raw
+      var productHtml = summaries && summaries.product ? renderFeedbackSummary(summaries.product, grouped.product) : null;
+      var bugsHtml = summaries && summaries.bugs ? renderFeedbackSummary(summaries.bugs, grouped.bugs) : null;
+      var correctionsHtml = summaries && summaries.corrections ? renderFeedbackSummary(summaries.corrections, grouped.corrections) : null;
 
-      if (productBody) productBody.innerHTML = renderRawFeedback(grouped.product);
-      if (bugsBody) bugsBody.innerHTML = renderRawFeedback(grouped.bugs);
-      if (correctionsBody) correctionsBody.innerHTML = renderRawFeedback(grouped.corrections);
+      // Fall back to raw for any track without summaries
+      if (!productHtml) productHtml = renderRawFeedback(grouped.product);
+      if (!bugsHtml) bugsHtml = renderRawFeedback(grouped.bugs);
+      if (!correctionsHtml) correctionsHtml = renderRawFeedback(grouped.corrections);
+
+      if (productBody) productBody.innerHTML = productHtml;
+      if (bugsBody) bugsBody.innerHTML = bugsHtml;
+      if (correctionsBody) correctionsBody.innerHTML = correctionsHtml;
 
       if (loading) loading.style.display = 'none';
       if (content) content.style.display = '';
       wireInsightsActions();
+      wireSummaryToggles();
 
     } catch (e) {
       if (loading) loading.innerHTML = '<p style="color:#ef4444;text-align:center;padding:40px 0;">Failed to load feedback data.</p>';
@@ -2778,6 +2860,65 @@ All data in the prototype is randomly generated on each page load. KPI values, c
           btn.disabled = false;
         }
       });
+    });
+  }
+
+  /** Wire expand/collapse toggles on summary items to show raw source submissions */
+  function wireSummaryToggles() {
+    var overlay = document.getElementById('insights-overlay');
+    if (!overlay) return;
+    overlay.querySelectorAll('.feedback-summary-toggle').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var sources = btn.nextElementSibling;
+        if (!sources) return;
+        var open = sources.style.display !== 'none';
+        sources.style.display = open ? 'none' : '';
+        btn.textContent = btn.textContent.replace(open ? '\u25be' : '\u25b8', open ? '\u25b8' : '\u25be');
+      });
+    });
+  }
+
+  // ── Rebuild buttons ──────────────────────────────────────────
+  document.querySelectorAll('.guide-feedback-rebuild').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      var track = btn.dataset.track;
+      if (!track) return;
+      btn.disabled = true;
+      var origText = btn.textContent;
+      btn.textContent = 'Rebuilding\u2026';
+      try {
+        await fetch(CHATBOT_PROXY + '/protoguide/feedback/summary?action=rebuild&track=' + encodeURIComponent(track), {
+          method: 'POST',
+          headers: getAuthHeaders()
+        });
+        await loadFeedbackInsights();
+      } catch (e) {
+        console.error('Rebuild failed:', e);
+      }
+      btn.disabled = false;
+      btn.textContent = origText;
+    });
+  });
+
+  var rebuildAllBtn = document.getElementById('insights-rebuild-all');
+  if (rebuildAllBtn) {
+    rebuildAllBtn.addEventListener('click', async function () {
+      rebuildAllBtn.disabled = true;
+      rebuildAllBtn.textContent = 'Rebuilding\u2026';
+      try {
+        var tracks = ['product', 'bugs', 'corrections'];
+        for (var i = 0; i < tracks.length; i++) {
+          await fetch(CHATBOT_PROXY + '/protoguide/feedback/summary?action=rebuild&track=' + tracks[i], {
+            method: 'POST',
+            headers: getAuthHeaders()
+          });
+        }
+        await loadFeedbackInsights();
+      } catch (e) {
+        console.error('Rebuild all failed:', e);
+      }
+      rebuildAllBtn.disabled = false;
+      rebuildAllBtn.textContent = 'Rebuild All';
     });
   }
 

@@ -1535,6 +1535,82 @@ body[data-panel="bar"] .ai-panel-inner {
   margin-top: 6px;
 }
 
+/* ── Organized summary rendering ───────────────────────────── */
+.feedback-summary-category {
+  margin-bottom: 16px;
+}
+.feedback-summary-category-name {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--panel-text-muted);
+  margin: 0 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+.feedback-summary-item {
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.6);
+  border: 1px solid rgba(0,0,0,0.04);
+}
+.feedback-summary-item-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.feedback-summary-text {
+  font-size: 13px;
+  color: var(--panel-text);
+  flex: 1;
+  line-height: 1.4;
+}
+.feedback-report-count {
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: #f59e0b;
+  padding: 1px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.feedback-summary-meta {
+  font-size: 11px;
+  color: var(--panel-text-muted);
+  margin-top: 4px;
+}
+.feedback-summary-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--panel-accent, #8b7355);
+  padding: 2px 0;
+  margin-top: 4px;
+}
+.feedback-summary-toggle:hover {
+  text-decoration: underline;
+}
+.feedback-summary-sources {
+  margin-top: 8px;
+  padding-left: 8px;
+  border-left: 2px solid rgba(0,0,0,0.06);
+}
+.feedback-summary-sources .feedback-item {
+  font-size: 12px;
+}
+.feedback-summary-updated {
+  font-size: 11px;
+  color: var(--panel-text-muted);
+  text-align: right;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0,0,0,0.06);
+}
+
 /* ── 9a. Insights overlay (wide, fixed-position) ─────────── */
 
 .guide-insights-overlay {

@@ -1,4 +1,5 @@
 import { handleAnalyticsQuery } from './analytics-query.js';
+import { organizeFeedback, rebuildTrackSummary, typeToTrack } from './feedback-organizer.js';
 
 const SEED_EMAIL = 'rmilwid@gmail.com';
 
@@ -13,6 +14,21 @@ function json(data, status = 200) {
     status,
     headers: { 'Content-Type': 'application/json', ...CORS },
   });
+}
+
+// Map D1 feedback row to frontend-compatible camelCase
+function mapSubmissionRow(row) {
+  return {
+    id: row.id,
+    text: row.raw_text,
+    section: row.section,
+    type: row.type,
+    submitterName: row.submitter_name,
+    createdAt: row.submitted_at,
+    organizeStatus: row.organize_status,
+    deleted: !!row.deleted,
+    deletedAt: row.deleted_at,
+  };
 }
 
 // ── Valid widget IDs (synced from widget-catalog.js) ─────────
@@ -118,7 +134,7 @@ async function verifyProtoGuideAdmin(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
 
     const url = new URL(request.url);
@@ -548,55 +564,134 @@ export default {
       }
     }
 
-    // ── GET /protoguide/feedback — list all feedback ─────────
-    if (path === '/protoguide/feedback' && request.method === 'GET') {
-      const submissions = await env.PROTOGUIDE_AUTH.get('feedback', 'json') || [];
-      return json({ submissions });
+    // ── GET /protoguide/feedback/summary — organized summaries ──
+    if (path === '/protoguide/feedback/summary' && request.method === 'GET') {
+      try {
+        const { results } = await env.FEEDBACK_DB.prepare(
+          'SELECT track, summary_json FROM feedback_summaries'
+        ).all();
+        const summaries = {};
+        for (const row of results) {
+          try { summaries[row.track] = JSON.parse(row.summary_json); } catch (_) {}
+        }
+        return json({ summaries });
+      } catch (e) {
+        return json({ error: 'Failed to fetch summaries', message: e.message }, 500);
+      }
     }
 
-    // ── POST /protoguide/feedback — store feedback entry ──────
+    // ── POST /protoguide/feedback/summary — rebuild track ───────
+    if (path === '/protoguide/feedback/summary' && request.method === 'POST') {
+      try {
+        const action = url.searchParams.get('action');
+        const track = url.searchParams.get('track');
+        if (action === 'rebuild' && track) {
+          const result = await rebuildTrackSummary(env.FEEDBACK_DB, env, track);
+          return json(result);
+        }
+        return json({ error: 'Missing action=rebuild&track=...' }, 400);
+      } catch (e) {
+        return json({ error: 'Rebuild failed', message: e.message }, 500);
+      }
+    }
+
+    // ── GET /protoguide/feedback — list all feedback (D1) ─────────
+    if (path === '/protoguide/feedback' && request.method === 'GET') {
+      try {
+        const { results } = await env.FEEDBACK_DB.prepare(
+          'SELECT * FROM feedback_submissions WHERE deleted = 0 ORDER BY submitted_at DESC'
+        ).all();
+
+        // Auto-migrate from KV if D1 is empty
+        if (results.length === 0) {
+          const kvData = await env.PROTOGUIDE_AUTH.get('feedback', 'json');
+          if (kvData && kvData.length > 0) {
+            for (const item of kvData) {
+              await env.FEEDBACK_DB.prepare(
+                'INSERT OR IGNORE INTO feedback_submissions (id, submitted_at, submitter_name, raw_text, section, type, deleted, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+              ).bind(
+                item.id,
+                item.createdAt || new Date().toISOString(),
+                item.submitterName || item.submitter_name || null,
+                item.text || item.rawText || item.raw_text || '',
+                item.section || 'General',
+                item.type || 'product',
+                item.deleted ? 1 : 0,
+                item.deletedAt || item.deleted_at || null
+              ).run();
+            }
+            await env.PROTOGUIDE_AUTH.delete('feedback');
+            // Re-query after migration
+            const { results: migrated } = await env.FEEDBACK_DB.prepare(
+              'SELECT * FROM feedback_submissions WHERE deleted = 0 ORDER BY submitted_at DESC'
+            ).all();
+            return json({ submissions: migrated.map(mapSubmissionRow) });
+          }
+        }
+
+        return json({ submissions: results.map(mapSubmissionRow) });
+      } catch (e) {
+        return json({ error: 'Failed to fetch feedback', message: e.message }, 500);
+      }
+    }
+
+    // ── POST /protoguide/feedback — store feedback entry (D1) ──────
     if (path === '/protoguide/feedback' && request.method === 'POST') {
       try {
         const body = await request.json();
-        const submissions = await env.PROTOGUIDE_AUTH.get('feedback', 'json') || [];
-        const entry = {
-          id: 'fb_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-          ...body,
-          createdAt: new Date().toISOString(),
-        };
-        submissions.push(entry);
-        await env.PROTOGUIDE_AUTH.put('feedback', JSON.stringify(submissions));
-        return json({ ok: true, id: entry.id });
+        const id = 'fb_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+        const text = body.text || '';
+        const section = body.section || 'General';
+        const type = body.type || 'product';
+        const submitterName = body.submitterName || body.submitter_name || null;
+
+        await env.FEEDBACK_DB.prepare(
+          'INSERT INTO feedback_submissions (id, submitter_name, raw_text, section, type) VALUES (?, ?, ?, ?, ?)'
+        ).bind(id, submitterName, text, section, type).run();
+
+        // Fire-and-forget organizer
+        const track = typeToTrack(type);
+        ctx.waitUntil(
+          organizeFeedback(env.FEEDBACK_DB, env, track, { id, rawText: text, section, type })
+            .catch(e => console.error('Organizer error:', e.message))
+        );
+
+        return json({ ok: true, id });
       } catch (e) {
         return json({ error: 'Failed to store feedback', message: e.message }, 500);
       }
     }
 
-    // ── PUT /protoguide/feedback/:id — update feedback entry ──
+    // ── PUT /protoguide/feedback/:id — update feedback entry (D1) ──
     if (path.startsWith('/protoguide/feedback/') && request.method === 'PUT') {
       try {
         const feedbackId = decodeURIComponent(path.split('/protoguide/feedback/')[1]);
         const body = await request.json();
-        const submissions = await env.PROTOGUIDE_AUTH.get('feedback', 'json') || [];
-        const idx = submissions.findIndex(s => s.id === feedbackId);
-        if (idx === -1) return json({ error: 'not found' }, 404);
-        submissions[idx] = { ...submissions[idx], ...body, updatedAt: new Date().toISOString() };
-        await env.PROTOGUIDE_AUTH.put('feedback', JSON.stringify(submissions));
+        const sets = [];
+        const vals = [];
+        if (body.text !== undefined) { sets.push('raw_text = ?'); vals.push(body.text); }
+        if (body.section !== undefined) { sets.push('section = ?'); vals.push(body.section); }
+        if (body.type !== undefined) { sets.push('type = ?'); vals.push(body.type); }
+        if (body.submitterName !== undefined) { sets.push('submitter_name = ?'); vals.push(body.submitterName); }
+        if (sets.length === 0) return json({ ok: true });
+        vals.push(feedbackId);
+        await env.FEEDBACK_DB.prepare(
+          `UPDATE feedback_submissions SET ${sets.join(', ')} WHERE id = ?`
+        ).bind(...vals).run();
         return json({ ok: true });
       } catch (e) {
         return json({ error: 'Failed to update feedback', message: e.message }, 500);
       }
     }
 
-    // ── DELETE /protoguide/feedback/:id — soft-delete feedback entry
+    // ── DELETE /protoguide/feedback/:id — soft-delete (D1) ────────
     if (path.startsWith('/protoguide/feedback/') && request.method === 'DELETE') {
       try {
         const feedbackId = decodeURIComponent(path.split('/protoguide/feedback/')[1]);
-        const submissions = await env.PROTOGUIDE_AUTH.get('feedback', 'json') || [];
-        const idx = submissions.findIndex(s => s.id === feedbackId);
-        if (idx === -1) return json({ error: 'not found' }, 404);
-        submissions[idx] = { ...submissions[idx], deleted: true, deletedAt: new Date().toISOString() };
-        await env.PROTOGUIDE_AUTH.put('feedback', JSON.stringify(submissions));
+        const result = await env.FEEDBACK_DB.prepare(
+          "UPDATE feedback_submissions SET deleted = 1, deleted_at = datetime('now') WHERE id = ?"
+        ).bind(feedbackId).run();
+        if (result.meta.changes === 0) return json({ error: 'not found' }, 404);
         return json({ ok: true });
       } catch (e) {
         return json({ error: 'Failed to delete feedback', message: e.message }, 500);

@@ -13,3 +13,11 @@ id = "0c1e49948295435fac162f47ec0e6ec4"
 [[kv_namespaces]]
 binding = "PROTOGUIDE_AUTH"
 id = "6c2b3b43b5c8444990176970ae976b21"
+
+[[d1_databases]]
+binding = "FEEDBACK_DB"
+database_name = "protoguide-feedback"
+database_id = "41f6a8f5-db90-4897-ad5c-2e53b3354f36"
+
+[vars]
+LINEAR_TEAM_KEY = "ANA"

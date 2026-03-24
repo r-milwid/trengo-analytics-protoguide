@@ -588,13 +588,15 @@ export default {
       }
     }
 
-    // ── DELETE /protoguide/feedback/:id — delete feedback entry
+    // ── DELETE /protoguide/feedback/:id — soft-delete feedback entry
     if (path.startsWith('/protoguide/feedback/') && request.method === 'DELETE') {
       try {
         const feedbackId = decodeURIComponent(path.split('/protoguide/feedback/')[1]);
         const submissions = await env.PROTOGUIDE_AUTH.get('feedback', 'json') || [];
-        const filtered = submissions.filter(s => s.id !== feedbackId);
-        await env.PROTOGUIDE_AUTH.put('feedback', JSON.stringify(filtered));
+        const idx = submissions.findIndex(s => s.id === feedbackId);
+        if (idx === -1) return json({ error: 'not found' }, 404);
+        submissions[idx] = { ...submissions[idx], deleted: true, deletedAt: new Date().toISOString() };
+        await env.PROTOGUIDE_AUTH.put('feedback', JSON.stringify(submissions));
         return json({ ok: true });
       } catch (e) {
         return json({ error: 'Failed to delete feedback', message: e.message }, 500);

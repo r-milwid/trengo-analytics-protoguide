@@ -974,3 +974,340 @@ describe('14. Feedback System', () => {
     );
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// 15. Feedback System — Comprehensive Tests
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('15. Feedback System — Comprehensive Tests', () => {
+
+  // ── Helper: extract a section of code starting from a marker ───────
+  function extractSection(source, startMarker, maxLen = 800) {
+    const idx = source.indexOf(startMarker);
+    if (idx === -1) return '';
+    return source.substring(idx, idx + maxLen);
+  }
+
+  // ── Helper: extract worker feedback handler by method ──────────────
+  // Finds the if-block that contains both '/protoguide/feedback' and the
+  // given HTTP method on the same line, then returns `len` chars from
+  // the start of that line.
+  function extractFeedbackHandler(method, len = 700) {
+    const methodPat = "request.method === '" + method + "'";
+    let searchIdx = 0;
+    while (searchIdx < workerJs.length) {
+      const hit = workerJs.indexOf(methodPat, searchIdx);
+      if (hit === -1) return '';
+      // Find the start of the line containing this hit
+      const lineStart = workerJs.lastIndexOf('\n', hit) + 1;
+      const lineEnd = workerJs.indexOf('\n', hit);
+      const line = workerJs.substring(lineStart, lineEnd);
+      if (line.includes('/protoguide/feedback')) {
+        // Found the right handler — go back to find the `if` on this line
+        const ifStart = workerJs.lastIndexOf('if (', hit);
+        // Only use ifStart if it's on the same line (within 200 chars)
+        const start = (hit - ifStart < 200) ? ifStart : lineStart;
+        return workerJs.substring(start, start + len);
+      }
+      searchIdx = hit + 1;
+    }
+    return '';
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // Data Retention Tests (top priority)
+  // ══════════════════════════════════════════════════════════════════
+
+  describe('Data Retention', () => {
+    test('Worker DELETE must soft-delete — must NOT use .filter() to remove entries', () => {
+      const deleteHandler = extractFeedbackHandler('DELETE');
+      assert.ok(deleteHandler, 'DELETE /protoguide/feedback handler not found in worker.js');
+      assert.ok(
+        !deleteHandler.includes('.filter('),
+        'DELETE handler uses .filter() to remove entries — should soft-delete with deleted:true instead'
+      );
+    });
+
+    test('Worker DELETE must set deleted: true on the entry', () => {
+      const deleteHandler = extractFeedbackHandler('DELETE');
+      assert.ok(deleteHandler, 'DELETE /protoguide/feedback handler not found');
+      assert.ok(
+        deleteHandler.includes('deleted: true') ||
+        deleteHandler.includes('deleted:true') ||
+        deleteHandler.includes("deleted: 'true'"),
+        'DELETE handler does not set deleted: true — entries are permanently lost on delete'
+      );
+    });
+
+    test('Worker DELETE still writes full array back to KV', () => {
+      const deleteHandler = extractFeedbackHandler('DELETE');
+      assert.ok(deleteHandler, 'DELETE /protoguide/feedback handler not found');
+      assert.ok(
+        deleteHandler.includes(".put('feedback'") || deleteHandler.includes('.put("feedback"'),
+        'DELETE handler does not write back to KV — data would be lost'
+      );
+    });
+
+    test('Frontend filters deleted items at display time in loadFeedbackInsights', () => {
+      const loadSection = extractSection(protoguideJs, 'async function loadFeedbackInsights', 1000);
+      assert.ok(loadSection, 'loadFeedbackInsights not found');
+      assert.ok(
+        loadSection.includes('s.deleted') || loadSection.includes('item.deleted'),
+        'loadFeedbackInsights does not check deleted flag — soft-deleted items would still display'
+      );
+    });
+
+    test('Worker POST appends with .push() and never overwrites', () => {
+      const postHandler = extractFeedbackHandler('POST');
+      assert.ok(postHandler, 'POST /protoguide/feedback handler not found in worker.js');
+      assert.ok(
+        postHandler.includes('.push('),
+        'POST handler does not use .push() — may be overwriting existing feedback'
+      );
+      assert.ok(
+        postHandler.includes(".put('feedback'") || postHandler.includes('.put("feedback"'),
+        'POST handler does not write back to KV'
+      );
+    });
+
+    test('Worker PUT merges with spread operator, not full replacement', () => {
+      const putHandler = extractFeedbackHandler('PUT');
+      assert.ok(putHandler, 'PUT /protoguide/feedback handler not found');
+      assert.ok(
+        putHandler.includes('...submissions[idx]') ||
+        putHandler.includes('...submissions[ idx ]') ||
+        putHandler.includes('Object.assign'),
+        'PUT handler does not spread/merge existing entry — fields could be lost on update'
+      );
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // Field Consistency Tests
+  // ══════════════════════════════════════════════════════════════════
+
+  describe('Field Consistency', () => {
+    test('storeFeedback sends text field in POST body', () => {
+      const storeSection = extractSection(protoguideJs, 'async function storeFeedback', 600);
+      assert.ok(storeSection, 'storeFeedback not found');
+      assert.ok(
+        storeSection.includes('text: feedbackObj.text') || storeSection.includes('text:feedbackObj.text'),
+        'storeFeedback does not send text field'
+      );
+    });
+
+    test('renderRawFeedback reads item.text (matching stored field name)', () => {
+      const renderSection = extractSection(protoguideJs, 'function renderRawFeedback', 500);
+      assert.ok(renderSection, 'renderRawFeedback not found');
+      assert.ok(
+        renderSection.includes('item.text') || renderSection.includes("item['text']"),
+        'renderRawFeedback does not read item.text — field name mismatch with what storeFeedback sends'
+      );
+    });
+
+    test('Worker POST generates unique IDs with fb_ prefix', () => {
+      const postHandler = extractFeedbackHandler('POST');
+      assert.ok(postHandler, 'POST /protoguide/feedback handler not found');
+      assert.ok(
+        postHandler.includes("id: 'fb_") || postHandler.includes('id: "fb_') || postHandler.includes("id: `fb_"),
+        'POST handler does not generate id with fb_ prefix'
+      );
+    });
+
+    test('Worker POST adds createdAt timestamp', () => {
+      const postHandler = extractFeedbackHandler('POST');
+      assert.ok(postHandler, 'POST /protoguide/feedback handler not found');
+      assert.ok(
+        postHandler.includes('createdAt'),
+        'POST handler does not add createdAt timestamp'
+      );
+    });
+
+    test('Worker PUT adds updatedAt timestamp', () => {
+      const putHandler = extractFeedbackHandler('PUT');
+      assert.ok(putHandler, 'PUT /protoguide/feedback handler not found');
+      assert.ok(
+        putHandler.includes('updatedAt'),
+        'PUT handler does not add updatedAt timestamp'
+      );
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // Frontend-Backend Contract Tests
+  // ══════════════════════════════════════════════════════════════════
+
+  describe('Frontend-Backend Contract', () => {
+    test('storeFeedback sends all required fields: text, section, type, submitterName', () => {
+      const storeSection = extractSection(protoguideJs, 'async function storeFeedback', 600);
+      assert.ok(storeSection, 'storeFeedback not found');
+      assert.ok(storeSection.includes('text:'), 'storeFeedback missing text field');
+      assert.ok(storeSection.includes('section:'), 'storeFeedback missing section field');
+      assert.ok(storeSection.includes('type:'), 'storeFeedback missing type field');
+      assert.ok(storeSection.includes('submitterName:'), 'storeFeedback missing submitterName field');
+    });
+
+    test('fetchFeedback reads submissions from response (data.submissions)', () => {
+      const fetchSection = extractSection(protoguideJs, 'async function fetchFeedback', 300);
+      assert.ok(fetchSection, 'fetchFeedback not found');
+      assert.ok(
+        fetchSection.includes('data.submissions') || fetchSection.includes("data['submissions']"),
+        'fetchFeedback does not read data.submissions from response'
+      );
+    });
+
+    test('Worker GET returns { submissions: [...] } shape', () => {
+      const getHandler = extractFeedbackHandler('GET');
+      assert.ok(getHandler, 'GET /protoguide/feedback handler not found');
+      assert.ok(
+        getHandler.includes('json({ submissions') || getHandler.includes('json({submissions'),
+        'GET handler does not return { submissions } object'
+      );
+    });
+
+    test('Delete action in UI sends DELETE request via wireInsightsActions', () => {
+      const wireSection = extractSection(protoguideJs, 'function wireInsightsActions', 1400);
+      assert.ok(wireSection, 'wireInsightsActions not found');
+      assert.ok(
+        wireSection.includes("method: 'DELETE'") || wireSection.includes('method: "DELETE"'),
+        'wireInsightsActions delete handler does not send DELETE request'
+      );
+    });
+
+    test('Move action in UI sends PUT with type in body via wireInsightsActions', () => {
+      const wireSection = extractSection(protoguideJs, 'function wireInsightsActions', 1400);
+      assert.ok(wireSection, 'wireInsightsActions not found');
+      assert.ok(
+        wireSection.includes("method: 'PUT'") || wireSection.includes('method: "PUT"'),
+        'wireInsightsActions move handler does not send PUT request'
+      );
+      assert.ok(
+        wireSection.includes('type:') || wireSection.includes('"type"'),
+        'wireInsightsActions move handler does not include type in body'
+      );
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // Feedback Type Handling Tests
+  // ══════════════════════════════════════════════════════════════════
+
+  describe('Feedback Type Handling', () => {
+    test('Three feedback types handled in grouping: product, bug, correction', () => {
+      const loadSection = extractSection(protoguideJs, 'async function loadFeedbackInsights', 1000);
+      assert.ok(loadSection, 'loadFeedbackInsights not found');
+      assert.ok(loadSection.includes("'bug'") || loadSection.includes('"bug"'),
+        'loadFeedbackInsights does not handle bug type');
+      assert.ok(loadSection.includes("'correction'") || loadSection.includes('"correction"'),
+        'loadFeedbackInsights does not handle correction type');
+      assert.ok(loadSection.includes('product'),
+        'loadFeedbackInsights does not handle product type');
+    });
+
+    test('report_bug tool sets type to bug in handleToolResult', () => {
+      const handleSection = extractSection(protoguideJs, 'async function handleToolResult', 900);
+      assert.ok(handleSection, 'handleToolResult not found');
+      assert.ok(
+        handleSection.includes("report_bug") && handleSection.includes("'bug'"),
+        'handleToolResult does not set type to bug for report_bug tool'
+      );
+    });
+
+    test('submit_feedback tool defaults type to product in handleToolResult', () => {
+      const handleSection = extractSection(protoguideJs, 'async function handleToolResult', 900);
+      assert.ok(handleSection, 'handleToolResult not found');
+      assert.ok(
+        handleSection.includes("submit_feedback") && handleSection.includes("'product'"),
+        'handleToolResult does not set type to product for submit_feedback tool'
+      );
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // Pending Feedback / Name Collection Tests
+  // ══════════════════════════════════════════════════════════════════
+
+  describe('Pending Feedback & Name Collection', () => {
+    test('pendingFeedback variable is declared', () => {
+      assert.ok(
+        protoguideJs.includes('let pendingFeedback') || protoguideJs.includes('var pendingFeedback'),
+        'pendingFeedback variable not declared'
+      );
+    });
+
+    test('sessionUserName variable is declared', () => {
+      assert.ok(
+        protoguideJs.includes('let sessionUserName') || protoguideJs.includes('var sessionUserName'),
+        'sessionUserName variable not declared'
+      );
+    });
+
+    test('looksLikeName function exists and has basic guards for length and word count', () => {
+      const nameSection = extractSection(protoguideJs, 'function looksLikeName', 300);
+      assert.ok(nameSection, 'looksLikeName function not found');
+      assert.ok(
+        nameSection.includes('.length') || nameSection.includes('length >'),
+        'looksLikeName does not check string length'
+      );
+      assert.ok(
+        nameSection.includes('split') || nameSection.includes('words'),
+        'looksLikeName does not check word count'
+      );
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // HTML Container Tests
+  // ══════════════════════════════════════════════════════════════════
+
+  describe('HTML Containers', () => {
+    test('insights-overlay exists in protoguide.html', () => {
+      assert.ok(
+        protoguideHtml.includes('id="insights-overlay"'),
+        'insights-overlay container not found in HTML'
+      );
+    });
+
+    test('insights-content, insights-loading, insights-empty exist in HTML', () => {
+      assert.ok(protoguideHtml.includes('id="insights-content"'),
+        'insights-content not found in HTML');
+      assert.ok(protoguideHtml.includes('id="insights-loading"'),
+        'insights-loading not found in HTML');
+      assert.ok(protoguideHtml.includes('id="insights-empty"'),
+        'insights-empty not found in HTML');
+    });
+
+    test('insights-product-body, insights-bugs-body, insights-corrections-body exist in HTML', () => {
+      assert.ok(protoguideHtml.includes('id="insights-product-body"'),
+        'insights-product-body not found in HTML');
+      assert.ok(protoguideHtml.includes('id="insights-bugs-body"'),
+        'insights-bugs-body not found in HTML');
+      assert.ok(protoguideHtml.includes('id="insights-corrections-body"'),
+        'insights-corrections-body not found in HTML');
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // Error Handling Tests
+  // ══════════════════════════════════════════════════════════════════
+
+  describe('Error Handling', () => {
+    test('storeFeedback has try-catch error handling', () => {
+      const storeSection = extractSection(protoguideJs, 'async function storeFeedback', 600);
+      assert.ok(storeSection, 'storeFeedback not found');
+      assert.ok(
+        storeSection.includes('try') && storeSection.includes('catch'),
+        'storeFeedback does not have try-catch error handling'
+      );
+    });
+
+    test('fetchFeedback returns empty array on error', () => {
+      const fetchSection = extractSection(protoguideJs, 'async function fetchFeedback', 400);
+      assert.ok(fetchSection, 'fetchFeedback not found');
+      assert.ok(
+        fetchSection.includes('return []'),
+        'fetchFeedback does not return empty array on error/fallback'
+      );
+    });
+  });
+});

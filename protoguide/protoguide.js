@@ -2724,7 +2724,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     return items.map(function (item) {
       var id = item.id || '';
       var type = item.type || 'product';
-      var rawText = item.rawText || item.raw_text || '';
+      var rawText = item.text || item.rawText || item.raw_text || '';
       var html = '<div class="feedback-item" data-id="' + escapeHtml(id) + '">';
       html += '<div class="feedback-item-header">';
       html += feedbackBadges(item);

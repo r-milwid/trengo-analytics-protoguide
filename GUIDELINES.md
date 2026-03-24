@@ -21,5 +21,14 @@ ProtoGuide lives in `protoguide/` and calls `window._prototypeGuideAPI` directly
 - `/update-docs [filename]` — enforced read-first-then-rewrite procedure for maintaining docs (user-invoked)
 - `/self-review` — lightweight pre-commit check for prototypes (user-invoked)
 
+## Deployment
+
+- **Frontend** (protoguide.html, protoguide.js, app.js, etc.) deploys via Cloudflare Pages on git push.
+- **Worker** (`chatbot-proxy/worker.js`) must be deployed separately: `cd chatbot-proxy && npx wrangler deploy`.
+- **Always deploy the Worker** when finishing work that touches `chatbot-proxy/worker.js`. Don't wait for the user to ask.
+
 ## Decisions & Patterns
 <!-- When something is corrected or a non-obvious decision is made, rewrite this section to reflect it. Current-state only — no changelog. -->
+
+- **Feedback is soft-deleted** — the Worker DELETE endpoint sets `deleted: true` + `deletedAt` on the entry rather than removing it from the array. Frontend filters on `s.deleted` at display time. Feedback data is never permanently removed.
+- **Feedback text field** — stored as `text` in KV. Frontend reads `item.text || item.rawText || item.raw_text` for backward compatibility.

@@ -2648,7 +2648,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
   // Cache raw submissions keyed by id so summary view can show sources
   var _rawSubmissionsById = {};
 
-  function renderFeedbackSummary(summaryData, rawItems) {
+  function renderFeedbackSummary(summaryData, rawItems, trackType) {
     if (!summaryData || !summaryData.categories || !summaryData.categories.length) {
       return null; // signal to fall back to raw
     }
@@ -2667,6 +2667,19 @@ All data in the prototype is randomly generated on each page load. KPI values, c
         html += '<span class="feedback-summary-text">' + escapeHtml(item.summary) + '</span>';
         if (item.reportCount > 1) {
           html += '<span class="feedback-report-count">\u00d7' + item.reportCount + '</span>';
+        }
+        // Summary-level bulk actions
+        if (item.evidenceIds && item.evidenceIds.length > 0) {
+          var eIds = escapeHtml(item.evidenceIds.join(','));
+          html += '<div class="feedback-summary-actions">';
+          var allTypes = ['product', 'bug', 'correction'];
+          allTypes.forEach(function (t) {
+            if (t === trackType) return;
+            var label = t === 'product' ? 'feedback' : t === 'correction' ? 'correction' : 'bug';
+            html += '<button class="feedback-action-btn feedback-summary-move" data-evidence-ids="' + eIds + '" data-move-to="' + t + '">\u2192 ' + label + '</button>';
+          });
+          html += '<button class="feedback-action-btn feedback-summary-delete" data-evidence-ids="' + eIds + '">REMOVE</button>';
+          html += '</div>';
         }
         html += '</div>';
         if (item.evidenceIds && item.evidenceIds.length > 0) {
@@ -2734,9 +2747,9 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       });
 
       // Try organized summaries first, fall back to raw
-      var productHtml = summaries && summaries.product ? renderFeedbackSummary(summaries.product, grouped.product) : null;
-      var bugsHtml = summaries && summaries.bugs ? renderFeedbackSummary(summaries.bugs, grouped.bugs) : null;
-      var correctionsHtml = summaries && summaries.corrections ? renderFeedbackSummary(summaries.corrections, grouped.corrections) : null;
+      var productHtml = summaries && summaries.product ? renderFeedbackSummary(summaries.product, grouped.product, 'product') : null;
+      var bugsHtml = summaries && summaries.bugs ? renderFeedbackSummary(summaries.bugs, grouped.bugs, 'bug') : null;
+      var correctionsHtml = summaries && summaries.corrections ? renderFeedbackSummary(summaries.corrections, grouped.corrections, 'correction') : null;
 
       // Fall back to raw for any track without summaries
       if (!productHtml) productHtml = renderRawFeedback(grouped.product);
@@ -2825,7 +2838,54 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     var overlay = document.getElementById('insights-overlay');
     if (!overlay) return;
 
-    overlay.querySelectorAll('.feedback-action-delete').forEach(function (btn) {
+    // ── Summary-level bulk delete (all evidence submissions) ──
+    overlay.querySelectorAll('.feedback-summary-delete').forEach(function (btn) {
+      btn.addEventListener('click', async function (e) {
+        e.stopPropagation();
+        var ids = (btn.dataset.evidenceIds || '').split(',').filter(Boolean);
+        if (!ids.length) return;
+        btn.disabled = true;
+        btn.textContent = '...';
+        try {
+          for (var i = 0; i < ids.length; i++) {
+            await fetch(CHATBOT_PROXY + '/protoguide/feedback/' + encodeURIComponent(ids[i]), { method: 'DELETE', headers: getAuthHeaders() });
+          }
+          var summaryItem = btn.closest('.feedback-summary-item');
+          if (summaryItem) summaryItem.remove();
+        } catch (e2) {
+          console.error('Bulk delete failed:', e2);
+          btn.disabled = false;
+          btn.textContent = 'REMOVE';
+        }
+      });
+    });
+
+    // ── Summary-level bulk move (all evidence submissions) ──
+    overlay.querySelectorAll('.feedback-summary-move').forEach(function (btn) {
+      btn.addEventListener('click', async function (e) {
+        e.stopPropagation();
+        var ids = (btn.dataset.evidenceIds || '').split(',').filter(Boolean);
+        var newType = btn.dataset.moveTo;
+        if (!ids.length || !newType) return;
+        btn.disabled = true;
+        try {
+          for (var i = 0; i < ids.length; i++) {
+            await fetch(CHATBOT_PROXY + '/protoguide/feedback/' + encodeURIComponent(ids[i]), {
+              method: 'PUT',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({ type: newType })
+            });
+          }
+          await loadFeedbackInsights();
+        } catch (e2) {
+          console.error('Bulk move failed:', e2);
+          btn.disabled = false;
+        }
+      });
+    });
+
+    // ── Individual item delete (exclude summary-level buttons) ──
+    overlay.querySelectorAll('.feedback-action-delete:not(.feedback-summary-delete)').forEach(function (btn) {
       btn.addEventListener('click', async function () {
         var id = btn.dataset.id;
         if (!id) return;
@@ -2842,7 +2902,9 @@ All data in the prototype is randomly generated on each page load. KPI values, c
         }
       });
     });
-    overlay.querySelectorAll('.feedback-action-move').forEach(function (btn) {
+
+    // ── Individual item move (exclude summary-level buttons) ──
+    overlay.querySelectorAll('.feedback-action-move:not(.feedback-summary-move)').forEach(function (btn) {
       btn.addEventListener('click', async function () {
         var id = btn.dataset.id;
         var newType = btn.dataset.moveTo;

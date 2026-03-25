@@ -1560,6 +1560,21 @@ body[data-panel="bar"] .ai-panel-inner {
   display: flex;
   align-items: flex-start;
   gap: 8px;
+  flex-wrap: wrap;
+}
+.feedback-summary-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.feedback-summary-actions .feedback-action-btn {
+  font-size: 10px;
+  padding: 1px 6px;
+  opacity: 0.5;
+}
+.feedback-summary-item:hover .feedback-summary-actions .feedback-action-btn {
+  opacity: 1;
 }
 .feedback-summary-text {
   font-size: 13px;

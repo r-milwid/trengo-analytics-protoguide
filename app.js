@@ -30,10 +30,13 @@ const state = {
   channelFilter: new Set(),
   teamFilter: 'All teams',
   charts: {},
-  mockData: { kpi: {}, lists: {}, tables: {}, charts: {} },
+  dataCache: {},
+  dataRequests: {},
+  dataRevision: 0,
+  dataUI: { futureHighlightsEnabled: false },
   opportunityStates: {}, // id -> 'dismissed' | 'confirmed'
   chartViewMode: {},     // widgetId -> 'chart' | 'numbers'
-  barFilter: { widgetId: null, sectionId: null, selectedIndices: new Set() },
+  barFilter: { widgetId: null, sectionId: null, selectedIndices: new Set(), baseDatasets: null },
   tabs: JSON.parse(JSON.stringify(DEFAULT_TABS)),
   tabWidgets: {}, // tabId -> Set of widget IDs assigned to this tab
   teams: [],
@@ -83,6 +86,7 @@ const DEFAULT_TEAMS_KEY   = 'trengo_default_teams';
 const CUSTOMER_PROFILES_KEY = 'trengo_customer_profiles';
 const ANCHORS_NAV_USER_KEY = 'trengo_anchors_nav_user';
 const CONFIDENCE_THRESHOLDS_KEY = 'trengo_confidence_thresholds';
+const FUTURE_DATA_HIGHLIGHTS_KEY = 'trengo_future_data_highlights';
 
 // Onboarding confidence thresholds (0-10 scale, stored in localStorage, controllable from ProtoGuide settings)
 window._confidenceThresholds = (function () {
@@ -176,6 +180,26 @@ function canUseOnboardingTransition() {
   return hasHelionAccess() && isFeatureEnabled('onboarding-transition');
 }
 
+function readFutureDataHighlightsEnabled() {
+  try {
+    return localStorage.getItem(FUTURE_DATA_HIGHLIGHTS_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function syncFutureDataHighlightBodyFlag() {
+  document.body.dataset.futureHighlights = state.dataUI.futureHighlightsEnabled ? 'true' : 'false';
+}
+
+function setFutureDataHighlightsEnabled(enabled) {
+  state.dataUI.futureHighlightsEnabled = Boolean(enabled);
+  try {
+    localStorage.setItem(FUTURE_DATA_HIGHLIGHTS_KEY, state.dataUI.futureHighlightsEnabled ? 'true' : 'false');
+  } catch {}
+  syncFutureDataHighlightBodyFlag();
+}
+
 function showHelionAvatar() {
   const btn = document.getElementById('user-flag-btn');
   if (btn) {
@@ -220,6 +244,9 @@ function resetHelionAccess() {
 }
 
 window.canUseOnboardingTransition = canUseOnboardingTransition;
+
+state.dataUI.futureHighlightsEnabled = readFutureDataHighlightsEnabled();
+syncFutureDataHighlightBodyFlag();
 
 // Restore unlock state on page load
 if (localStorage.getItem(HELION_UNLOCKED_KEY)) showHelionAvatar();
@@ -771,6 +798,8 @@ function saveCustomerProfiles(profiles = []) {
   try {
     localStorage.setItem(CUSTOMER_PROFILES_KEY, JSON.stringify(normalized));
   } catch {}
+  clearWidgetDataCaches();
+  [...state.loadedSections].forEach((sectionId) => remountSection(sectionId));
   return cloneJson(normalized);
 }
 
@@ -897,9 +926,16 @@ function syncRoleToggleButtons() {
   // callable no-op so existing call-sites don't need guards.
 }
 
+function clearWidgetDataCaches() {
+  state.dataRevision += 1;
+  state.dataCache = {};
+  state.dataRequests = {};
+}
+
 function resetPrototypeStateToDefaults() {
   // Feature flags are testing configuration — never reset them.
   localStorage.removeItem(USER_TEAMS_KEY);
+  localStorage.removeItem(FUTURE_DATA_HIGHLIGHTS_KEY);
   state.tabs = JSON.parse(JSON.stringify(DEFAULT_TABS));
   state.tabWidgets = buildDefaultTabWidgets();
   state.lens = null;
@@ -910,9 +946,12 @@ function resetPrototypeStateToDefaults() {
   state.channelFilter = new Set();
   state.teamFilter = 'All teams';
   syncTeamsState(getDefaultTeams(), { persist: 'clear-user' });
+  state.dataUI.futureHighlightsEnabled = false;
+  syncFutureDataHighlightBodyFlag();
   state.opportunityStates = {};
   state.chartViewMode = {};
-  state.barFilter = { widgetId: null, sectionId: null, selectedIndices: new Set() };
+  state.barFilter = { widgetId: null, sectionId: null, selectedIndices: new Set(), baseDatasets: null };
+  clearWidgetDataCaches();
   state.hiddenWidgets = new Set();
   state.addedWidgets = new Set();
   state.sectionOrder = {};
@@ -939,6 +978,7 @@ function resetPrototypeStateToDefaults() {
 // Re-applies the server's version and re-renders.
 window._dashboardConfigConflictHandler = function(config) {
   DashboardConfig.apply(config, state);
+  clearWidgetDataCaches();
   persistPrototypeTeams('user');
   initTabWidgets();
   updateTeamFilterOptions();
@@ -971,7 +1011,604 @@ function cloneData(data) {
   return JSON.parse(JSON.stringify(data));
 }
 
+const DATE_FILTER_KEYS = {
+  'Today': 'today',
+  'Last 7 days': 'last_7_days',
+  'Last 14 days': 'last_14_days',
+  'Last 30 days': 'last_30_days',
+  'Last 90 days': 'last_90_days',
+};
+
+function normalizeDateFilterKey(label) {
+  return DATE_FILTER_KEYS[label] || 'last_30_days';
+}
+
+function getActiveDashboardCustomerContext() {
+  const active = window.AssistantStorage?.getActiveSession?.() || {};
+  const customerId = active.customerId || null;
+  const customerProfile = customerId && window.CustomerProfilesStore?.getById
+    ? window.CustomerProfilesStore.getById(customerId)
+    : null;
+  return { customerId, customerProfile };
+}
+
+function buildDashboardQueryContext() {
+  const customerContext = getActiveDashboardCustomerContext();
+  return {
+    customerId: customerContext.customerId,
+    customerProfile: customerContext.customerProfile,
+    role: state.role || 'supervisor',
+    personaRole: state.personaRole || state.role || 'supervisor',
+    lens: state.lens || null,
+    dateFilterLabel: state.dateFilter,
+    dateRangeKey: normalizeDateFilterKey(state.dateFilter),
+    teamFilter: state.teamFilter || 'All teams',
+    channelFilter: [...state.channelFilter].sort(),
+  };
+}
+
+function buildWidgetDataCacheKey(widgetId, context = buildDashboardQueryContext()) {
+  return JSON.stringify({
+    widgetId,
+    customerId: context.customerId || null,
+    role: context.role || null,
+    personaRole: context.personaRole || null,
+    lens: context.lens || null,
+    dateRangeKey: context.dateRangeKey || 'last_30_days',
+    teamFilter: context.teamFilter || 'All teams',
+    channelFilter: (context.channelFilter || []).slice().sort(),
+  });
+}
+
+function getCachedWidgetData(widgetId, context = buildDashboardQueryContext()) {
+  return state.dataCache[buildWidgetDataCacheKey(widgetId, context)] || null;
+}
+
+function collectProvenanceSources(node, bucket = new Set()) {
+  if (!node) return bucket;
+  if (Array.isArray(node)) {
+    node.forEach((item) => collectProvenanceSources(item, bucket));
+    return bucket;
+  }
+  if (typeof node !== 'object') return bucket;
+  if (node.source) bucket.add(node.source);
+  Object.values(node).forEach((value) => collectProvenanceSources(value, bucket));
+  return bucket;
+}
+
+function summarizeProvenanceSources(targets) {
+  const sources = [...collectProvenanceSources(targets)];
+  if (!sources.length) return 'mock';
+  if (sources.length === 1) return sources[0];
+  return 'mixed';
+}
+
+function createTargetState(source, highlight) {
+  return { source, highlight: Boolean(highlight) };
+}
+
+function shouldHighlightFuturePart(part) {
+  return Boolean(state.dataUI.futureHighlightsEnabled && part && part.highlight);
+}
+
+function widgetFutureBadgeLabel(stage) {
+  if (stage === 'future') return 'Future';
+  if (stage === 'mixed') return 'Mixed';
+  return '';
+}
+
+function buildMockStructuredTarget(value, highlight) {
+  if (Array.isArray(value)) {
+    return {
+      source: 'mock',
+      highlight,
+      items: value.map((item) => buildMockStructuredTarget(item, highlight)),
+    };
+  }
+  if (value && typeof value === 'object') {
+    const fields = {};
+    Object.keys(value).forEach((key) => {
+      fields[key] = buildMockStructuredTarget(value[key], highlight);
+    });
+    return {
+      source: 'mock',
+      highlight,
+      fields,
+    };
+  }
+  return createTargetState('mock', highlight);
+}
+
+function buildDefaultProvenanceTargets(kind, payload, stage, source = 'mock') {
+  const highlight = stage !== 'v1';
+  switch (kind) {
+    case 'kpi':
+      return {
+        primary: createTargetState(source, highlight),
+        sub: createTargetState(source, highlight),
+        trend: createTargetState(source, highlight),
+        extras: (payload?.extras || []).map(() => createTargetState(source, highlight)),
+      };
+    case 'kpi-group':
+      return { groups: (payload?.groups || []).map((group) => buildMockStructuredTarget(group, highlight)) };
+    case 'bar-chart':
+    case 'line-chart':
+    case 'doughnut-chart':
+      return {
+        datasets: (payload?.datasets || []).map((dataset) => ({
+          source,
+          highlight,
+          points: Array.isArray(dataset?.data) ? dataset.data.map(() => createTargetState(source, highlight)) : [],
+        })),
+      };
+    case 'funnel':
+      return { stages: (payload?.stages || []).map((stageValue) => buildMockStructuredTarget(stageValue, highlight)) };
+    case 'table':
+      return { rows: (payload?.rows || []).map((row) => buildMockStructuredTarget(row, highlight)) };
+    case 'list':
+    case 'list-actions':
+    case 'agent-status':
+    case 'opportunities':
+      return { items: (payload?.items || []).map((item) => buildMockStructuredTarget(item, highlight)) };
+    case 'progress':
+      return {
+        value: createTargetState(source, highlight),
+        label: createTargetState(source, highlight),
+      };
+    default:
+      return {};
+  }
+}
+
+function mergeArrayByIndex(apiItems = [], mockItems = [], mergeFn) {
+  const length = Math.max(apiItems.length, mockItems.length);
+  const merged = [];
+  const provenance = [];
+  for (let i = 0; i < length; i++) {
+    const next = mergeFn(apiItems[i], mockItems[i], i);
+    merged.push(next.value);
+    provenance.push(next.provenance);
+  }
+  return { value: merged, provenance };
+}
+
+function mergePrimitive(apiValue, mockValue, highlightWhenMock) {
+  const useApi = apiValue !== undefined && apiValue !== null && apiValue !== '';
+  return {
+    value: useApi ? apiValue : mockValue,
+    provenance: createTargetState(useApi ? 'api' : 'mock', !useApi && highlightWhenMock),
+  };
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mergeStructuredValue(apiValue, mockValue, highlightWhenMock) {
+  if (Array.isArray(apiValue) || Array.isArray(mockValue)) {
+    const mergedItems = mergeArrayByIndex(apiValue || [], mockValue || [], (nextApi, nextMock) => mergeStructuredValue(nextApi, nextMock, highlightWhenMock));
+    const source = summarizeProvenanceSources(mergedItems.provenance);
+    return {
+      value: mergedItems.value,
+      provenance: {
+        source,
+        highlight: source !== 'api' && highlightWhenMock,
+        items: mergedItems.provenance,
+      },
+    };
+  }
+
+  if (isPlainObject(apiValue) || isPlainObject(mockValue)) {
+    const apiObject = isPlainObject(apiValue) ? apiValue : {};
+    const mockObject = isPlainObject(mockValue) ? mockValue : {};
+    const keys = Array.from(new Set([...Object.keys(mockObject), ...Object.keys(apiObject)]));
+    const value = {};
+    const fields = {};
+    keys.forEach((key) => {
+      const mergedField = mergeStructuredValue(apiObject[key], mockObject[key], highlightWhenMock);
+      value[key] = mergedField.value;
+      fields[key] = mergedField.provenance;
+    });
+    const source = summarizeProvenanceSources(fields);
+    return {
+      value,
+      provenance: {
+        source,
+        highlight: source !== 'api' && highlightWhenMock,
+        fields,
+      },
+    };
+  }
+
+  return mergePrimitive(apiValue, mockValue, highlightWhenMock);
+}
+
+function mergeChartLabels(apiLabels = [], mockLabels = [], highlightWhenMock) {
+  const mergedLabels = mergeArrayByIndex(apiLabels || [], mockLabels || [], (apiLabel, mockLabel) => {
+    const label = mergePrimitive(apiLabel, mockLabel, highlightWhenMock);
+    return { value: label.value, provenance: label.provenance };
+  });
+  const source = summarizeProvenanceSources(mergedLabels.provenance);
+  return {
+    value: mergedLabels.value,
+    provenance: {
+      source,
+      highlight: source !== 'api' && highlightWhenMock,
+      items: mergedLabels.provenance,
+    },
+  };
+}
+
+function mergeTableColumns(apiColumns = [], mockColumns = [], highlightWhenMock) {
+  const apiByKey = new Map();
+  const mockByKey = new Map();
+  const orderedKeys = [];
+  const seenKeys = new Set();
+
+  mockColumns.forEach((column, index) => {
+    const key = String(column?.key || `mock-${index}`);
+    mockByKey.set(key, column);
+    if (!seenKeys.has(key)) {
+      orderedKeys.push(key);
+      seenKeys.add(key);
+    }
+  });
+
+  apiColumns.forEach((column, index) => {
+    const key = String(column?.key || `api-${index}`);
+    apiByKey.set(key, column);
+    if (!seenKeys.has(key)) {
+      orderedKeys.push(key);
+      seenKeys.add(key);
+    }
+  });
+
+  const mergedColumns = orderedKeys.map((key) => {
+    const apiColumn = apiByKey.get(key);
+    const mockColumn = mockByKey.get(key);
+    return {
+      value: cloneData(apiColumn || mockColumn || {}),
+      provenance: createTargetState(apiColumn ? 'api' : 'mock', !apiColumn && highlightWhenMock),
+    };
+  });
+
+  const provenanceItems = mergedColumns.map((column) => column.provenance);
+  const source = summarizeProvenanceSources(provenanceItems);
+  return {
+    value: mergedColumns.map((column) => column.value),
+    provenance: {
+      source,
+      highlight: source !== 'api' && highlightWhenMock,
+      items: provenanceItems,
+    },
+  };
+}
+
+function mergeWidgetPayload(kind, apiPayload, mockPayload, stage) {
+  const highlightWhenMock = stage !== 'v1';
+  if (!apiPayload) {
+    return {
+      payload: cloneData(mockPayload),
+      targets: buildDefaultProvenanceTargets(kind, mockPayload, stage, 'mock'),
+    };
+  }
+
+  if (kind === 'kpi') {
+    const value = mergePrimitive(apiPayload.value, mockPayload.value, highlightWhenMock);
+    const sub = mergePrimitive(apiPayload.sub, mockPayload.sub, highlightWhenMock);
+    const trendVal = mergePrimitive(apiPayload?.trend?.val, mockPayload?.trend?.val, highlightWhenMock);
+    const trendDir = mergePrimitive(apiPayload?.trend?.dir, mockPayload?.trend?.dir, highlightWhenMock);
+    const extras = mergeArrayByIndex(apiPayload.extras || [], mockPayload.extras || [], (apiItem, mockItem) => ({
+      value: {
+        label: apiItem?.label || mockItem?.label || '',
+        value: apiItem?.value != null ? apiItem.value : mockItem?.value,
+      },
+      provenance: createTargetState(apiItem?.value != null ? 'api' : 'mock', apiItem?.value == null && highlightWhenMock),
+    }));
+    return {
+      payload: {
+        value: value.value,
+        sub: sub.value,
+        trend: { val: trendVal.value, dir: trendDir.value },
+        extras: extras.value,
+      },
+      targets: {
+        primary: value.provenance,
+        sub: sub.provenance,
+        trend: trendVal.provenance,
+        extras: extras.provenance,
+      },
+    };
+  }
+
+  if (['bar-chart', 'line-chart', 'doughnut-chart'].includes(kind)) {
+    const labels = mergeChartLabels(apiPayload.labels || [], mockPayload.labels || [], highlightWhenMock);
+    const datasets = mergeArrayByIndex(apiPayload.datasets || [], mockPayload.datasets || [], (apiDataset, mockDataset) => {
+      const dataPoints = mergeArrayByIndex(apiDataset?.data || [], mockDataset?.data || [], (apiPoint, mockPoint) => {
+        const point = mergePrimitive(apiPoint, mockPoint, highlightWhenMock);
+        return { value: point.value, provenance: point.provenance };
+      });
+      const source = summarizeProvenanceSources(dataPoints.provenance);
+      return {
+        value: {
+          ...(mockDataset || {}),
+          ...(apiDataset || {}),
+          label: apiDataset?.label || mockDataset?.label || '',
+          data: dataPoints.value,
+        },
+        provenance: {
+          source,
+          highlight: source !== 'api' && highlightWhenMock,
+          points: dataPoints.provenance,
+        },
+      };
+    });
+    return {
+      payload: {
+        ...(mockPayload || {}),
+        ...(apiPayload || {}),
+        labels: labels.value,
+        datasets: datasets.value,
+      },
+      targets: {
+        labels: labels.provenance,
+        datasets: datasets.provenance,
+      },
+    };
+  }
+
+  if (kind === 'table') {
+    const columns = mergeTableColumns(apiPayload.columns || [], mockPayload.columns || [], highlightWhenMock);
+    const rows = mergeArrayByIndex(apiPayload.rows || [], mockPayload.rows || [], (apiRow, mockRow) => mergeStructuredValue(apiRow, mockRow, highlightWhenMock));
+    return {
+      payload: {
+        ...(mockPayload || {}),
+        ...(apiPayload || {}),
+        columns: columns.value,
+        rows: rows.value,
+      },
+      targets: {
+        columns: columns.provenance,
+        rows: rows.provenance,
+      },
+    };
+  }
+
+  if (['list', 'list-actions', 'agent-status', 'opportunities'].includes(kind)) {
+    const items = mergeArrayByIndex(apiPayload.items || [], mockPayload.items || [], (apiItem, mockItem) => mergeStructuredValue(apiItem, mockItem, highlightWhenMock));
+    return {
+      payload: {
+        ...(mockPayload || {}),
+        ...(apiPayload || {}),
+        items: items.value,
+      },
+      targets: { items: items.provenance },
+    };
+  }
+
+  if (kind === 'progress') {
+    const value = mergePrimitive(apiPayload.percent, mockPayload.percent, highlightWhenMock);
+    const label = mergePrimitive(apiPayload.label, mockPayload.label, highlightWhenMock);
+    return {
+      payload: { percent: value.value, label: label.value },
+      targets: { value: value.provenance, label: label.provenance },
+    };
+  }
+
+  if (kind === 'kpi-group') {
+    const groups = mergeArrayByIndex(apiPayload.groups || [], mockPayload.groups || [], (apiGroup, mockGroup) => mergeStructuredValue(apiGroup, mockGroup, highlightWhenMock));
+    return {
+      payload: { groups: groups.value },
+      targets: { groups: groups.provenance },
+    };
+  }
+
+  if (kind === 'funnel') {
+    const stages = mergeArrayByIndex(apiPayload.stages || [], mockPayload.stages || [], (apiStage, mockStage) => mergeStructuredValue(apiStage, mockStage, highlightWhenMock));
+    return {
+      payload: { stages: stages.value },
+      targets: { stages: stages.provenance },
+    };
+  }
+
+  return {
+    payload: cloneData(apiPayload || mockPayload),
+    targets: buildDefaultProvenanceTargets(kind, apiPayload || mockPayload, stage, apiPayload ? 'api' : 'mock'),
+  };
+}
+
+function buildWidgetResult(widget, payload, options = {}) {
+  return {
+    widgetId: widget.id,
+    kind: widget.dataSpec?.kind || widget.type,
+    status: options.status || 'ready',
+    payload,
+    exportData: options.exportData || cloneData(payload),
+  };
+}
+
+function buildApiStubWidgetResult() {
+  return null;
+}
+
+function buildMockWidgetResult(widget, context) {
+  switch (widget.type) {
+    case 'kpi':
+      return buildWidgetResult(widget, buildMockKPIPayload(widget, context));
+    case 'kpi-group':
+      return buildWidgetResult(widget, buildMockKPIGroupPayload(widget, context));
+    case 'bar-chart':
+      return buildWidgetResult(widget, getMockBarData(widget.id, context));
+    case 'line-chart':
+      return buildWidgetResult(widget, getMockLineData(widget.id, context));
+    case 'doughnut-chart':
+      return buildWidgetResult(widget, getMockDoughnutData(widget.id, context));
+    case 'funnel':
+      return buildWidgetResult(widget, buildMockFunnelPayload(widget, context));
+    case 'table':
+      return buildWidgetResult(widget, buildMockTablePayload(widget, context));
+    case 'list':
+      return buildWidgetResult(widget, buildMockListPayload(widget, context));
+    case 'agent-status':
+      return buildWidgetResult(widget, buildMockAgentStatusPayload(widget, context));
+    case 'list-actions':
+      return buildWidgetResult(widget, buildMockListActionsPayload(widget, context));
+    case 'progress':
+      return buildWidgetResult(widget, buildMockProgressPayload(widget, context));
+    case 'opportunities':
+      return buildWidgetResult(widget, buildMockOpportunitiesPayload(widget, context));
+    default:
+      return buildWidgetResult(widget, {});
+  }
+}
+
+function mergeWidgetResults(widget, apiResult, mockResult) {
+  const kind = widget.dataSpec?.kind || widget.type;
+  const stage = widget.futureSpec?.stage || 'v1';
+  const merged = mergeWidgetPayload(kind, apiResult?.payload || null, mockResult?.payload || {}, stage);
+  return {
+    widgetId: widget.id,
+    kind,
+    status: 'ready',
+    payload: merged.payload,
+    exportData: cloneData(merged.payload),
+    provenance: {
+      stage,
+      source: summarizeProvenanceSources(merged.targets),
+      targets: merged.targets,
+    },
+  };
+}
+
+function resolveWidgetDataInternal(widget, context) {
+  const apiResult = buildApiStubWidgetResult(widget, context);
+  const mockResult = buildMockWidgetResult(widget, context);
+  return Promise.resolve(mergeWidgetResults(widget, apiResult, mockResult));
+}
+
+function resolveWidgetData(widgetId, context = buildDashboardQueryContext()) {
+  const widget = WIDGET_BY_ID[widgetId];
+  if (!widget) return Promise.reject(new Error(`Unknown widget "${widgetId}"`));
+  const cacheKey = buildWidgetDataCacheKey(widgetId, context);
+  const requestRevision = state.dataRevision;
+  if (state.dataCache[cacheKey]) return Promise.resolve(cloneData(state.dataCache[cacheKey]));
+  if (state.dataRequests[cacheKey]) return state.dataRequests[cacheKey].then(cloneData);
+
+  const request = resolveWidgetDataInternal(widget, context)
+    .then((result) => {
+      if (requestRevision === state.dataRevision) {
+        state.dataCache[cacheKey] = cloneData(result);
+        delete state.dataRequests[cacheKey];
+      }
+      return result;
+    })
+    .catch((error) => {
+      if (requestRevision === state.dataRevision) {
+        delete state.dataRequests[cacheKey];
+      }
+      throw error;
+    });
+
+  state.dataRequests[cacheKey] = request;
+  return request.then(cloneData);
+}
+
+function renderWidgetState(container, status, title, detail) {
+  container.innerHTML = `
+    <div class="widget-data-state widget-data-state--${status}">
+      <div class="widget-data-state-title">${title}</div>
+      ${detail ? `<div class="widget-data-state-detail">${detail}</div>` : ''}
+    </div>
+  `;
+}
+
+function clearWidgetFuturePresentation(container) {
+  const card = container.closest('.widget-card');
+  if (!card) return;
+  card.classList.remove('widget-card-future', 'widget-card-future-mixed', 'widget-card-future-full');
+  card.querySelector('.widget-future-badge')?.remove();
+}
+
+function applyWidgetFuturePresentation(container, result) {
+  const card = container.closest('.widget-card');
+  if (!card) return;
+  clearWidgetFuturePresentation(container);
+  if (!state.dataUI.futureHighlightsEnabled) return;
+  if (!result?.provenance || result.provenance.stage === 'v1') return;
+
+  const titleText = card.querySelector('.widget-title-text');
+  const badgeLabel = widgetFutureBadgeLabel(result.provenance.stage);
+  if (titleText && badgeLabel) {
+    const badge = document.createElement('span');
+    badge.className = 'widget-future-badge';
+    badge.textContent = badgeLabel;
+    titleText.after(badge);
+  }
+  card.classList.add('widget-card-future');
+  card.classList.add(result.provenance.stage === 'mixed' ? 'widget-card-future-mixed' : 'widget-card-future-full');
+}
+
+function renderResolvedWidget(container, widget, renderFn) {
+  renderWidgetState(container, 'loading', 'Loading data…');
+  const requestToken = `${widget.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  container.dataset.dataRequestToken = requestToken;
+
+  resolveWidgetData(widget.id, buildDashboardQueryContext())
+    .then((result) => {
+      if (!container.isConnected || container.dataset.dataRequestToken !== requestToken) return;
+      if (!result || result.status === 'empty') {
+        renderWidgetState(container, 'empty', 'No data available');
+        clearWidgetFuturePresentation(container);
+        return;
+      }
+      renderFn(result);
+      applyWidgetFuturePresentation(container, result);
+    })
+    .catch((error) => {
+      if (!container.isConnected || container.dataset.dataRequestToken !== requestToken) return;
+      renderWidgetState(container, 'error', 'Data unavailable', error?.message || 'Something went wrong while preparing this widget.');
+      clearWidgetFuturePresentation(container);
+    });
+}
+
+window._dashboardDataHelpers = {
+  buildDashboardQueryContext,
+  buildWidgetDataCacheKey,
+  mergeWidgetPayload,
+  resolveWidgetData,
+  normalizeDateFilterKey,
+};
+
 // ── WIDGET RENDERERS ───────────────────────────────────────────
+function destroyWidgetChart(widgetId) {
+  if (state.charts[widgetId]) {
+    state.charts[widgetId].destroy();
+    delete state.charts[widgetId];
+  }
+}
+
+function renderWidgetBody(container, w) {
+  const initialMode = state.chartViewMode[w.id] || 'chart';
+  if (['bar-chart', 'line-chart', 'doughnut-chart'].includes(w.type) && initialMode === 'numbers') {
+    renderChartNumbers(container, w);
+    return;
+  }
+  switch (w.type) {
+    case 'kpi': renderKPI(container, w); break;
+    case 'kpi-group': renderKPIGroup(container, w); break;
+    case 'bar-chart': renderBarChart(container, w); break;
+    case 'line-chart': renderLineChart(container, w); break;
+    case 'doughnut-chart': renderDoughnutChart(container, w); break;
+    case 'funnel': renderFunnel(container, w); break;
+    case 'table': renderTable(container, w); break;
+    case 'list': renderList(container, w); break;
+    case 'agent-status': renderAgentOnlineStatus(container, w); break;
+    case 'list-actions': renderListActions(container, w); break;
+    case 'progress': renderProgress(container, w); break;
+    case 'opportunities': renderOpportunities(container, w); break;
+  }
+}
+
 function renderWidget(w, section, placement, rows, layout) {
   if (!isWidgetRenderable(w)) return null;
 
@@ -1062,10 +1699,10 @@ function renderWidget(w, section, placement, rows, layout) {
     dlBtn.className = 'widget-action-btn widget-download-btn';
     dlBtn.title = 'Download as .csv';
     dlBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2v7.5"/><path d="M4 7l3 3 3-3"/><path d="M2 11v1h10v-1"/></svg>';
-    dlBtn.addEventListener('click', (e) => {
+    dlBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       window.sendEvent('Widget CSV downloaded — ' + w.title);
-      downloadWidgetCSV(w);
+      await downloadWidgetCSV(w);
     });
     actions.appendChild(dlBtn);
   }
@@ -1099,41 +1736,12 @@ function renderWidget(w, section, placement, rows, layout) {
       window.sendEvent('Widget view — ' + w.id + ' switched to ' + mode);
       toggle.querySelectorAll('.widget-view-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
       body.innerHTML = '';
-      if (state.charts[w.id]) { state.charts[w.id].destroy(); delete state.charts[w.id]; }
-      if (mode === 'chart') {
-        if (w.type === 'bar-chart') renderBarChart(body, w);
-        else if (w.type === 'line-chart') renderLineChart(body, w);
-        else if (w.type === 'doughnut-chart') renderDoughnutChart(body, w);
-      } else {
-        renderChartNumbers(body, w);
-      }
+      destroyWidgetChart(w.id);
+      renderWidgetBody(body, w);
     });
   }
 
-  const initialMode = state.chartViewMode[w.id] || 'chart';
-  switch (w.type) {
-    case 'kpi': renderKPI(body, w); break;
-    case 'kpi-group': renderKPIGroup(body, w); break;
-    case 'bar-chart':
-      if (initialMode === 'numbers') renderChartNumbers(body, w);
-      else renderBarChart(body, w);
-      break;
-    case 'line-chart':
-      if (initialMode === 'numbers') renderChartNumbers(body, w);
-      else renderLineChart(body, w);
-      break;
-    case 'doughnut-chart':
-      if (initialMode === 'numbers') renderChartNumbers(body, w);
-      else renderDoughnutChart(body, w);
-      break;
-    case 'funnel': renderFunnel(body, w); break;
-    case 'table': renderTable(body, w); break;
-    case 'list': renderList(body, w); break;
-    case 'agent-status': renderAgentOnlineStatus(body, w); break;
-    case 'list-actions': renderListActions(body, w); break;
-    case 'progress': renderProgress(body, w); break;
-    case 'opportunities': renderOpportunities(body, w); break;
-  }
+  renderWidgetBody(body, w);
 
   card.appendChild(body);
 
@@ -2268,334 +2876,326 @@ function getPrevPeriodLabel() {
   return map[state.dateFilter] || 'vs prev period';
 }
 
-function renderKPI(container, w) {
-  const data = getMockKPIData(w.id);
-  // Use scope-aware label if available
-  let subText = data.sub || '';
-  if (w.scopeLabel && w.scopeLabel[state.role]) {
-    subText = w.scopeLabel[state.role];
-  }
-  const extrasHtml = (data.extras && data.extras.length)
-    ? `<div class="kpi-extras">${data.extras.map(e =>
-        `<div class="kpi-extra-row">
-          <span class="kpi-extra-label">${e.label}</span>
-          <span class="kpi-extra-value">${e.value}</span>
-        </div>`
-      ).join('')}</div>`
-    : '';
-  container.innerHTML = `
-    <div class="kpi-value">${data.value}</div>
-    <div class="kpi-sub">${subText}</div>
-    <div class="kpi-trend ${data.trend.dir}">
-      ${data.trend.dir === 'up' ? '\u2191' : '\u2193'} ${data.trend.val}%
-      <span style="color:var(--gray-400);margin-left:4px">${getPrevPeriodLabel()}</span>
-    </div>
-    ${extrasHtml}
-  `;
+function buildFutureInlineBadge(part, label = 'Future') {
+  if (!shouldHighlightFuturePart(part)) return '';
+  return `<span class="future-inline-badge" title="Using mock fallback until API support is available">${escapeHtml(label)}</span>`;
 }
 
-function renderKPIGroup(container, w) {
-  if (w.id === 'ov-sales-kpis') {
-    const pipeline = `€${(rand(80, 200) * 1000).toLocaleString()}`;
-    const winRate  = `${rand(25, 55)}%`;
-    const avgDeal  = `€${(rand(2, 8) * 1000 + rand(0, 999)).toLocaleString()}`;
-    const cycle    = `${rand(12, 35)} days`;
-    container.innerHTML = `
-      <div style="display:flex;gap:24px;flex-wrap:wrap;">
-        <div>
-          <div style="font-size:12px;color:var(--gray-500)">Pipeline value</div>
-          <div style="font-size:22px;font-weight:700;color:var(--accent-dark)">${pipeline}</div>
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--gray-500)">Win rate</div>
-          <div style="font-size:22px;font-weight:700;color:#82c9ff">${winRate}</div>
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--gray-500)">Avg deal size</div>
-          <div style="font-size:22px;font-weight:700;color:var(--yellow)">${avgDeal}</div>
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--gray-500)">Avg sales cycle</div>
-          <div style="font-size:22px;font-weight:700;color:var(--gray-400)">${cycle}</div>
-        </div>
-      </div>
-    `;
-    return;
-  }
-  if (w.id === 'vc-call-duration-kpis' || w.id === 'op-vc-call-duration-kpis') {
-    const avg = `${rand(2,6)}m ${rand(0,59)}s`;
-    const longest = `${rand(15,35)}m ${rand(0,59)}s`;
-    const shortest = `0m ${rand(10,59)}s`;
-    container.innerHTML = `
-      <div style="display:flex;gap:24px;flex-wrap:wrap;">
-        <div>
-          <div style="font-size:12px;color:var(--gray-500)">Average</div>
-          <div style="font-size:22px;font-weight:700;color:var(--accent-dark)">${avg}</div>
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--gray-500)">Longest</div>
-          <div style="font-size:22px;font-weight:700;color:var(--yellow)">${longest}</div>
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--gray-500)">Shortest</div>
-          <div style="font-size:22px;font-weight:700;color:var(--gray-400)">${shortest}</div>
-        </div>
-      </div>
-    `;
-    return;
-  }
-  container.innerHTML = `
-    <div style="display:flex;gap:24px;flex-wrap:wrap;">
-      <div>
-        <div style="font-size:12px;color:var(--gray-500)">Positive responses</div>
-        <div style="font-size:22px;font-weight:700;color:var(--accent-dark)">\ud83d\udc4d 30</div>
-      </div>
-      <div>
-        <div style="font-size:12px;color:var(--gray-500)">Neutral responses</div>
-        <div style="font-size:22px;font-weight:700;color:var(--yellow)">\ud83d\ude10 1</div>
-      </div>
-      <div>
-        <div style="font-size:12px;color:var(--gray-500)">Negative responses</div>
-        <div style="font-size:22px;font-weight:700;color:var(--red)">\ud83d\udc4e 2</div>
-      </div>
-    </div>
-  `;
+function formatDisplayValue(value) {
+  if (typeof value === 'number') return value.toLocaleString();
+  return escapeHtml(value);
 }
 
-function getMockKPIData(id) {
-  if (state.mockData.kpi[id]) return state.mockData.kpi[id];
+function buildMockKPIPayload(widget) {
   const map = {
-    'ov-pipeline-value':   { value: '€124,500', sub: 'Sum of amounts for open deals', trend: pickTrend() },
-    'ov-win-rate':         { value: '34%', sub: 'Closed-won / total opportunities created', trend: pickTrend() },
-    'ov-avg-deal-size':    { value: '€3,680', sub: 'Total revenue from Closed-Won / # Closed-Won', trend: pickTrend() },
-    'ov-avg-sales-cycle':  { value: '18 days', sub: 'Avg. days from deal created to closed (won or lost)', trend: pickTrend() },
-    'ov-open-tickets':     { value: '16,610', sub: 'Across all channels', trend: pickTrend() },
+    'ov-pipeline-value': { value: '€124,500', sub: 'Sum of amounts for open deals', trend: pickTrend() },
+    'ov-win-rate': { value: '34%', sub: 'Closed-won / total opportunities created', trend: pickTrend() },
+    'ov-avg-deal-size': { value: '€3,680', sub: 'Total revenue from Closed-Won / # Closed-Won', trend: pickTrend() },
+    'ov-avg-sales-cycle': { value: '18 days', sub: 'Avg. days from deal created to closed (won or lost)', trend: pickTrend() },
+    'ov-open-tickets': { value: '16,610', sub: 'Across all channels', trend: pickTrend() },
     'ov-assigned-tickets': { value: '1,183', sub: 'Currently assigned', trend: pickTrend() },
-    'ov-first-response':   { value: '27m 35s', sub: 'Median', trend: pickTrend() },
-    'ov-resolution-time':  { value: '25h 35m', sub: 'Median', trend: pickTrend() },
-    'ov-escalation-rate':  { value: '8.7%', sub: 'AI \u2192 human handoff', trend: pickTrend(),
+    'ov-first-response': { value: '27m 35s', sub: 'Median', trend: pickTrend() },
+    'ov-resolution-time': { value: '25h 35m', sub: 'Median', trend: pickTrend() },
+    'ov-escalation-rate': {
+      value: '8.7%',
+      sub: 'AI → human handoff',
+      trend: pickTrend(),
       extras: [
         { label: 'Avg time before escalation', value: '4m 12s' },
         { label: 'Avg AI replies before escalation', value: '3.2' },
-      ]
+      ],
     },
-    'ov-knowledge-gaps':   { value: '42', sub: 'Unresolved or fallback cases', trend: { val: 12, dir: 'up' } },
-    'op-first-response':   { value: '27m 35s', sub: 'Median first response', trend: pickTrend() },
-    'op-resolution-time':  { value: '25h 35m', sub: 'Median resolution', trend: pickTrend() },
-    'op-reopened':         { value: '24', sub: 'Reopened this period', trend: pickTrend() },
-    'im-csat':             { value: '88%', sub: 'Customer satisfaction', trend: { val: 2, dir: 'up' } },
-    'im-response-rate':    { value: '18%', sub: 'Survey response rate', trend: pickTrend() },
-    'im-reopen-rate':      { value: '3.2%', sub: 'Of resolved tickets', trend: { val: 0.5, dir: 'down' } },
-    'im-surveys':          { value: '33', sub: 'Total surveys received', trend: pickTrend() },
-    'un-unknown-intents':  { value: '127', sub: 'Unclassified tickets', trend: { val: 8, dir: 'up' } },
-    'au-ai-tickets':       { value: '10,419', sub: 'AI-handled tickets', trend: { val: 18.7, dir: 'up' } },
-    'au-resolution-rate':  { value: '30.1%', sub: '4,159 tickets resolved', trend: { val: 8.7, dir: 'up' },
+    'ov-knowledge-gaps': { value: '42', sub: 'Unresolved or fallback cases', trend: { val: 12, dir: 'up' } },
+    'op-first-response': { value: '27m 35s', sub: 'Median first response', trend: pickTrend() },
+    'op-resolution-time': { value: '25h 35m', sub: 'Median resolution', trend: pickTrend() },
+    'op-reopened': { value: '24', sub: 'Reopened this period', trend: pickTrend() },
+    'im-csat': { value: '88%', sub: 'Customer satisfaction', trend: { val: 2, dir: 'up' } },
+    'im-response-rate': { value: '18%', sub: 'Survey response rate', trend: pickTrend() },
+    'im-reopen-rate': { value: '3.2%', sub: 'Of resolved tickets', trend: { val: 0.5, dir: 'down' } },
+    'un-unknown-intents': { value: '127', sub: 'Unclassified tickets', trend: { val: 8, dir: 'up' } },
+    'au-ai-tickets': { value: '10,419', sub: 'AI-handled tickets', trend: { val: 18.7, dir: 'up' } },
+    'au-resolution-rate': {
+      value: '30.1%',
+      sub: '4,159 tickets resolved',
+      trend: { val: 8.7, dir: 'up' },
       extras: [
         { label: 'Avg time to resolution', value: '2m 48s' },
         { label: 'Avg AI replies to resolve', value: '4.1' },
-      ]
+      ],
     },
-    'au-assistance-rate':  { value: '35.9%', sub: '4,964 tickets assisted', trend: { val: 3.8, dir: 'down' },
+    'au-assistance-rate': {
+      value: '35.9%',
+      sub: '4,964 tickets assisted',
+      trend: { val: 3.8, dir: 'down' },
       extras: [
         { label: 'Avg time before handoff', value: '3m 22s' },
         { label: 'Avg AI replies before handoff', value: '2.8' },
-      ]
+      ],
     },
     'au-open-ticket-rate': { value: '48', sub: 'No response yet', trend: { val: 5, dir: 'down' } },
     'au-journeys-escalations': { value: '312', sub: 'Escalated from journeys', trend: pickTrend() },
-    'vc-total-calls':          { value: '1,847', sub: 'Inbound + outbound', trend: pickTrend() },
-    'vc-missed-calls':         { value: '143', sub: 'Calls not answered', trend: { val: 12, dir: 'up' } },
-    'vc-time-to-answer':       { value: '32s', sub: 'Avg — all agents', trend: pickTrend() },
-    'vc-longest-wait':         { value: '8m 47s', sub: 'Single longest this period', trend: pickTrend() },
-    'vc-ivr-queue-time':       { value: '1m 48s', sub: 'Average per call', trend: pickTrend() },
-    'vc-channel-count':        { value: '6', sub: 'Active voice channels', trend: { val: 0, dir: 'up' } },
-    'vc-fcr-rate':             { value: '67%', sub: 'First call resolution', trend: { val: 3, dir: 'up' } },
-    'vc-callbacks-requested':  { value: '89', sub: 'Callback requests this period', trend: pickTrend() },
-    'vc-call-ticket-rate':     { value: '22%', sub: 'Calls resulting in a ticket', trend: pickTrend() },
-    // Cross-tab voice KPI mirrors
-    'op-vc-longest-wait':        { value: '8m 47s', sub: 'Single longest this period', trend: pickTrend() },
+    'ov-vc-missed-calls': { value: '143', sub: 'Calls not answered', trend: { val: 12, dir: 'up' } },
+    'ov-vc-total-calls': { value: '1,847', sub: 'Inbound + outbound', trend: pickTrend() },
+    'op-vc-time-to-answer': { value: '32s', sub: 'Avg — all agents', trend: pickTrend() },
+    'op-vc-longest-wait': { value: '8m 47s', sub: 'Single longest this period', trend: pickTrend() },
     'op-vc-callbacks-requested': { value: '89', sub: 'Callback requests this period', trend: pickTrend() },
-    'ov-vc-missed-calls':      { value: '143', sub: 'Calls not answered', trend: { val: 12, dir: 'up' } },
-    'ov-vc-total-calls':       { value: '1,847', sub: 'Inbound + outbound', trend: pickTrend() },
-    'op-vc-time-to-answer':    { value: '32s', sub: 'Avg \u2014 all agents', trend: pickTrend() },
-    'im-vc-fcr-rate':          { value: '67%', sub: 'First call resolution', trend: { val: 3, dir: 'up' } },
-    'im-vc-call-ticket-rate':  { value: '22%', sub: 'Calls resulting in a ticket', trend: pickTrend() },
-    'au-vc-ivr-queue-time':    { value: '1m 48s', sub: 'Average per call', trend: pickTrend() },
+    'im-vc-fcr-rate': { value: '67%', sub: 'First call resolution', trend: { val: 3, dir: 'up' } },
+    'im-vc-call-ticket-rate': { value: '22%', sub: 'Calls resulting in a ticket', trend: pickTrend() },
+    'au-vc-ivr-queue-time': { value: '1m 48s', sub: 'Average per call', trend: pickTrend() },
   };
-  const value = map[id] || { value: rand(100,9999).toLocaleString(), sub: '', trend: pickTrend() };
-  state.mockData.kpi[id] = value;
-  return value;
+  return cloneData(map[widget.id] || { value: rand(100, 9999).toLocaleString(), sub: '', trend: pickTrend(), extras: [] });
 }
 
-// ── CHART NUMBERS VIEW ─────────────────────────────────────────
+function buildMockKPIGroupPayload(widget) {
+  if (widget.id === 'ov-sales-kpis') {
+    return {
+      groups: [
+        { label: 'Pipeline value', value: `€${(rand(80, 200) * 1000).toLocaleString()}`, tone: 'accent' },
+        { label: 'Win rate', value: `${rand(25, 55)}%`, tone: 'info' },
+        { label: 'Avg deal size', value: `€${(rand(2, 8) * 1000 + rand(0, 999)).toLocaleString()}`, tone: 'warning' },
+        { label: 'Avg sales cycle', value: `${rand(12, 35)} days`, tone: 'muted' },
+      ],
+    };
+  }
+  if (widget.id === 'vc-call-duration-kpis' || widget.id === 'op-vc-call-duration-kpis') {
+    return {
+      groups: [
+        { label: 'Average', value: `${rand(2, 6)}m ${rand(0, 59)}s`, tone: 'accent' },
+        { label: 'Longest', value: `${rand(15, 35)}m ${rand(0, 59)}s`, tone: 'warning' },
+        { label: 'Shortest', value: `0m ${rand(10, 59)}s`, tone: 'muted' },
+      ],
+    };
+  }
+  return {
+    groups: [
+      { label: 'Positive responses', value: '👍 30', tone: 'accent' },
+      { label: 'Neutral responses', value: '😐 1', tone: 'warning' },
+      { label: 'Negative responses', value: '👎 2', tone: 'danger' },
+    ],
+  };
+}
+
+function renderKPI(container, w) {
+  renderResolvedWidget(container, w, (result) => {
+    const data = result.payload || {};
+    let subText = data.sub || '';
+    if (w.scopeLabel && w.scopeLabel[state.role]) subText = w.scopeLabel[state.role];
+    const extras = Array.isArray(data.extras) ? data.extras : [];
+    const extrasHtml = extras.length
+      ? `<div class="kpi-extras">${extras.map((extra, index) => `
+          <div class="kpi-extra-row${shouldHighlightFuturePart(result.provenance?.targets?.extras?.[index]) ? ' future-inline-row' : ''}">
+            <span class="kpi-extra-label">${escapeHtml(extra.label)}</span>
+            <span class="kpi-extra-value">${formatDisplayValue(extra.value)}${buildFutureInlineBadge(result.provenance?.targets?.extras?.[index])}</span>
+          </div>
+        `).join('')}</div>`
+      : '';
+    container.innerHTML = `
+      <div class="kpi-value">${formatDisplayValue(data.value)}${buildFutureInlineBadge(result.provenance?.targets?.primary)}</div>
+      <div class="kpi-sub">${escapeHtml(subText)}${buildFutureInlineBadge(result.provenance?.targets?.sub)}</div>
+      <div class="kpi-trend ${escapeHtml(data?.trend?.dir || 'neutral')}">
+        ${(data?.trend?.dir || 'up') === 'up' ? '\u2191' : '\u2193'} ${escapeHtml(data?.trend?.val ?? 0)}%
+        <span style="color:var(--gray-400);margin-left:4px">${getPrevPeriodLabel()}</span>
+        ${buildFutureInlineBadge(result.provenance?.targets?.trend)}
+      </div>
+      ${extrasHtml}
+    `;
+  });
+}
+
+function renderKPIGroup(container, w) {
+  renderResolvedWidget(container, w, (result) => {
+    const groups = result.payload?.groups || [];
+    const groupTargets = result.provenance?.targets?.groups || [];
+    container.innerHTML = `
+      <div class="kpi-group-grid">
+        ${groups.map((group, index) => `
+          <div class="kpi-group-item${shouldHighlightFuturePart(groupTargets[index]) ? ' future-inline-row' : ''}">
+            <div class="kpi-group-label">${escapeHtml(group.label)}</div>
+            <div class="kpi-group-value kpi-group-value--${escapeHtml(group.tone || 'muted')}">${formatDisplayValue(group.value)}${buildFutureInlineBadge(groupTargets[index])}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  });
+}
+
 function renderChartNumbers(container, w) {
-  let data;
-  if (w.type === 'doughnut-chart') {
-    data = getMockDoughnutData(w.id);
-    const vals = data.datasets[0].data;
-    const total = vals.reduce((a, b) => a + b, 0);
+  renderResolvedWidget(container, w, (result) => {
+    const data = result.payload || {};
+    if (w.type === 'doughnut-chart') {
+      const values = data.datasets?.[0]?.data || [];
+      const colors = data.datasets?.[0]?.backgroundColor || [];
+      const pointTargets = result.provenance?.targets?.datasets?.[0]?.points || [];
+      const total = values.reduce((sum, value) => sum + (typeof value === 'number' ? value : 0), 0);
+      container.innerHTML = `
+        <div class="chart-numbers">
+          ${data.labels.map((label, index) => `
+            <div class="chart-numbers-row${shouldHighlightFuturePart(pointTargets[index]) ? ' future-inline-row' : ''}">
+              <span class="chart-numbers-dot" style="background:${colors[index] || CHART_COLORS.gray}"></span>
+              <span class="chart-numbers-label">${escapeHtml(label)}</span>
+              <span class="chart-numbers-value">${formatDisplayValue(values[index])}${buildFutureInlineBadge(pointTargets[index])}</span>
+              <span class="chart-numbers-pct">${total > 0 ? Math.round((Number(values[index]) || 0) / total * 100) : 0}%</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+      return;
+    }
+
+    const datasets = data.datasets || [];
+    const firstDataset = datasets[0] || {};
+    const isPerBarColor = datasets.length === 1 && Array.isArray(firstDataset.backgroundColor) && firstDataset.backgroundColor.length > 1;
     let html = '<div class="chart-numbers">';
-    data.labels.forEach((label, i) => {
-      const val = vals[i];
-      const pct = total > 0 ? Math.round(val / total * 100) : 0;
-      html += `<div class="chart-numbers-row">
-        <span class="chart-numbers-dot" style="background:${data.datasets[0].backgroundColor[i]}"></span>
-        <span class="chart-numbers-label">${label}</span>
-        <span class="chart-numbers-value">${val.toLocaleString()}</span>
-        <span class="chart-numbers-pct">${pct}%</span>
-      </div>`;
-    });
-    html += '</div>';
-    container.innerHTML = html;
-  } else {
-    // bar / line: show each dataset's total or latest value
-    const getter = w.type === 'bar-chart' ? getMockBarData : getMockLineData;
-    data = getter(w.id);
-    let html = '<div class="chart-numbers">';
-    // Single-dataset with per-bar colours → one row per label (like doughnut view)
-    const ds0 = data.datasets[0];
-    const isPerBarColor = data.datasets.length === 1 && Array.isArray(ds0.backgroundColor) && ds0.backgroundColor.length > 1;
     if (isPerBarColor) {
-      data.labels.forEach((label, i) => {
-        const val = ds0.data[i];
-        if (typeof val !== 'number') return;
-        html += `<div class="chart-numbers-row">
-          <span class="chart-numbers-dot" style="background:${ds0.backgroundColor[i]}"></span>
-          <span class="chart-numbers-label">${label}</span>
-          <span class="chart-numbers-value">${val.toLocaleString()}</span>
-        </div>`;
+      const pointTargets = result.provenance?.targets?.datasets?.[0]?.points || [];
+      data.labels.forEach((label, index) => {
+        html += `
+          <div class="chart-numbers-row${shouldHighlightFuturePart(pointTargets[index]) ? ' future-inline-row' : ''}">
+            <span class="chart-numbers-dot" style="background:${firstDataset.backgroundColor[index]}"></span>
+            <span class="chart-numbers-label">${escapeHtml(label)}</span>
+            <span class="chart-numbers-value">${formatDisplayValue(firstDataset.data?.[index])}${buildFutureInlineBadge(pointTargets[index])}</span>
+          </div>
+        `;
       });
     } else {
-      data.datasets.forEach(ds => {
-        const vals = ds.data.filter(v => typeof v === 'number');
-        const total = vals.reduce((a, b) => a + b, 0);
-        const avg = vals.length ? Math.round(total / vals.length) : 0;
-        const color = ds.borderColor || (Array.isArray(ds.backgroundColor) ? ds.backgroundColor[0] : ds.backgroundColor) || 'var(--gray-400)';
-        html += `<div class="chart-numbers-row">
-          <span class="chart-numbers-dot" style="background:${color}"></span>
-          <span class="chart-numbers-label">${ds.label}</span>
-          <span class="chart-numbers-value">${total.toLocaleString()}</span>
-          <span class="chart-numbers-pct">avg ${avg.toLocaleString()}/day</span>
-        </div>`;
+      datasets.forEach((dataset, index) => {
+        const values = (dataset.data || []).filter((value) => typeof value === 'number');
+        const total = values.reduce((sum, value) => sum + value, 0);
+        const avg = values.length ? Math.round(total / values.length) : 0;
+        const color = dataset.borderColor || (Array.isArray(dataset.backgroundColor) ? dataset.backgroundColor[0] : dataset.backgroundColor) || 'var(--gray-400)';
+        const datasetTarget = result.provenance?.targets?.datasets?.[index];
+        html += `
+          <div class="chart-numbers-row${shouldHighlightFuturePart(datasetTarget) ? ' future-inline-row' : ''}">
+            <span class="chart-numbers-dot" style="background:${color}"></span>
+            <span class="chart-numbers-label">${escapeHtml(dataset.label || 'Series')}</span>
+            <span class="chart-numbers-value">${total.toLocaleString()}${buildFutureInlineBadge(datasetTarget)}</span>
+            <span class="chart-numbers-pct">avg ${avg.toLocaleString()}/day</span>
+          </div>
+        `;
       });
-      // Also show label-by-label breakdown if single dataset and ≤8 labels
-      if (data.datasets.length === 1 && data.labels.length <= 8) {
+      if (datasets.length === 1 && data.labels.length <= 8) {
+        const pointTargets = result.provenance?.targets?.datasets?.[0]?.points || [];
         html += '<div class="chart-numbers-breakdown">';
-        data.labels.forEach((label, i) => {
-          const val = data.datasets[0].data[i];
-          if (typeof val !== 'number') return;
-          html += `<div class="chart-numbers-breakdown-row">
-            <span class="chart-numbers-breakdown-label">${label}</span>
-            <span class="chart-numbers-breakdown-value">${val.toLocaleString()}</span>
-          </div>`;
+        data.labels.forEach((label, index) => {
+          html += `
+            <div class="chart-numbers-breakdown-row${shouldHighlightFuturePart(pointTargets[index]) ? ' future-inline-row' : ''}">
+              <span class="chart-numbers-breakdown-label">${escapeHtml(label)}</span>
+              <span class="chart-numbers-breakdown-value">${formatDisplayValue(datasets[0].data?.[index])}${buildFutureInlineBadge(pointTargets[index])}</span>
+            </div>
+          `;
         });
         html += '</div>';
       }
     }
     html += '</div>';
     container.innerHTML = html;
-  }
-}
-
-// ── FUNNEL ─────────────────────────────────────────────────────
-function renderFunnel(container, w) {
-  const stages = [
-    { label: 'New',         value: 240 },
-    { label: 'Qualified',   value: 160 },
-    { label: 'Proposal',    value: 95  },
-    { label: 'Negotiation', value: 58  },
-    { label: 'Closed Won',  value: 32  },
-  ];
-  const chartH   = 200;
-  const maxVal    = stages[0].value;
-  const barH      = stages.map(s => Math.max(8, Math.round((s.value / maxVal) * chartH)));
-  const connW     = 52;
-  const parts     = [];
-
-  stages.forEach((s, i) => {
-    parts.push(`
-      <div class="funnel-stage">
-        <div class="funnel-bar-col">
-          <div class="funnel-bar" style="height:${barH[i]}px"><span class="funnel-bar-value">${s.value}</span></div>
-        </div>
-        <span class="funnel-stage-label">${s.label}</span>
-      </div>`);
-    if (i < stages.length - 1) {
-      const pct  = Math.round((stages[i + 1].value / s.value) * 100);
-      const drop = 100 - pct;
-      const y1   = chartH - barH[i];
-      const y2   = chartH - barH[i + 1];
-      const pts  = `0,${y1} 0,${chartH} ${connW},${chartH} ${connW},${y2}`;
-      parts.push(`
-        <div class="funnel-connector">
-          <svg viewBox="0 0 ${connW} ${chartH}" preserveAspectRatio="none">
-            <polygon points="${pts}" fill="rgba(111,205,191,0.18)"/>
-          </svg>
-          <div class="funnel-rate-pill">
-            <span class="funnel-rate-pct">${pct}%</span>
-            <span class="funnel-rate-drop">↓ ${drop}%</span>
-          </div>
-        </div>`);
-    }
   });
-  container.innerHTML = `<div class="funnel-container">${parts.join('')}</div>`;
 }
 
-// ── CSV DOWNLOAD ────────────────────────────────────────────────
-function downloadWidgetCSV(w) {
-  let csvRows = [];
-  const chartTypes = ['bar-chart', 'line-chart', 'doughnut-chart'];
+function buildMockFunnelPayload() {
+  return {
+    stages: [
+      { label: 'New', value: 240 },
+      { label: 'Qualified', value: 160 },
+      { label: 'Proposal', value: 95 },
+      { label: 'Negotiation', value: 58 },
+      { label: 'Closed Won', value: 32 },
+    ],
+  };
+}
 
-  if (chartTypes.includes(w.type)) {
-    // Get chart data from the same mock functions used for rendering
-    let data;
-    if (w.type === 'bar-chart') data = getMockBarData(w.id);
-    else if (w.type === 'line-chart') data = getMockLineData(w.id);
-    else data = getMockDoughnutData(w.id);
+function renderFunnel(container, w) {
+  renderResolvedWidget(container, w, (result) => {
+    const stages = result.payload?.stages || [];
+    const stageTargets = result.provenance?.targets?.stages || [];
+    const chartHeight = 200;
+    const maxValue = Math.max(...stages.map((stage) => Number(stage.value) || 0), 1);
+    const barHeights = stages.map((stage) => Math.max(8, Math.round(((Number(stage.value) || 0) / maxValue) * chartHeight)));
+    const connectorWidth = 52;
+    const parts = [];
 
-    if (data.datasets.length === 1) {
-      // Single dataset: Label, Value columns
-      csvRows.push(['"Label"', `"${data.datasets[0].label || 'Value'}"`]);
-      data.labels.forEach((label, i) => {
-        const val = data.datasets[0].data[i];
-        csvRows.push([`"${label}"`, typeof val === 'number' ? val : `"${val}"`]);
-      });
-    } else {
-      // Multiple datasets: Label, Dataset1, Dataset2, ...
-      const header = ['"Label"', ...data.datasets.map(ds => `"${ds.label || 'Value'}"`)];
-      csvRows.push(header);
-      data.labels.forEach((label, i) => {
-        const row = [`"${label}"`];
-        data.datasets.forEach(ds => {
-          const val = ds.data[i];
-          row.push(typeof val === 'number' ? val : `"${val || ''}"`);
-        });
-        csvRows.push(row);
-      });
-    }
-  } else if (w.type === 'table') {
-    // Extract from rendered table in the DOM
-    const card = document.querySelector(`[data-widget="${w.id}"]`);
-    if (card) {
-      const table = card.querySelector('table');
-      if (table) {
-        const rows = table.querySelectorAll('tr');
-        rows.forEach(tr => {
-          const cells = tr.querySelectorAll('th, td');
-          const row = [];
-          cells.forEach(cell => {
-            const text = cell.textContent.trim().replace(/"/g, '""');
-            row.push(`"${text}"`);
-          });
-          csvRows.push(row);
-        });
+    stages.forEach((stage, index) => {
+      parts.push(`
+        <div class="funnel-stage${shouldHighlightFuturePart(stageTargets[index]) ? ' future-inline-row' : ''}">
+          <div class="funnel-bar-col">
+            <div class="funnel-bar" style="height:${barHeights[index]}px">
+              <span class="funnel-bar-value">${formatDisplayValue(stage.value)}${buildFutureInlineBadge(stageTargets[index])}</span>
+            </div>
+          </div>
+          <span class="funnel-stage-label">${escapeHtml(stage.label)}</span>
+        </div>
+      `);
+      if (index < stages.length - 1) {
+        const pct = Math.round(((Number(stages[index + 1].value) || 0) / Math.max(Number(stage.value) || 1, 1)) * 100);
+        const drop = 100 - pct;
+        const startY = chartHeight - barHeights[index];
+        const endY = chartHeight - barHeights[index + 1];
+        const points = `0,${startY} 0,${chartHeight} ${connectorWidth},${chartHeight} ${connectorWidth},${endY}`;
+        parts.push(`
+          <div class="funnel-connector">
+            <svg viewBox="0 0 ${connectorWidth} ${chartHeight}" preserveAspectRatio="none">
+              <polygon points="${points}" fill="rgba(111,205,191,0.18)"/>
+            </svg>
+            <div class="funnel-rate-pill">
+              <span class="funnel-rate-pct">${pct}%</span>
+              <span class="funnel-rate-drop">↓ ${drop}%</span>
+            </div>
+          </div>
+        `);
       }
-    }
+    });
+    container.innerHTML = `<div class="funnel-container">${parts.join('')}</div>`;
+  });
+}
+
+function csvQuote(value) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`;
+}
+
+function buildCsvRowsFromChartPayload(payload) {
+  const datasets = payload.datasets || [];
+  if (!datasets.length) return [];
+  if (datasets.length === 1) {
+    return [
+      [csvQuote('Label'), csvQuote(datasets[0].label || 'Value')],
+      ...payload.labels.map((label, index) => [csvQuote(label), csvQuote(datasets[0].data?.[index] ?? '')]),
+    ];
   }
+  return [
+    [csvQuote('Label'), ...datasets.map((dataset) => csvQuote(dataset.label || 'Value'))],
+    ...payload.labels.map((label, index) => [
+      csvQuote(label),
+      ...datasets.map((dataset) => csvQuote(dataset.data?.[index] ?? '')),
+    ]),
+  ];
+}
 
-  if (csvRows.length === 0) return;
+function buildCsvRowsFromTablePayload(payload) {
+  const columns = payload.columns || [];
+  const rows = payload.rows || [];
+  if (!columns.length) return [];
+  return [
+    columns.map((column) => csvQuote(column.label || column.key)),
+    ...rows.map((row) => columns.map((column) => {
+      const value = row[column.key];
+      return csvQuote(Array.isArray(value) ? value.join(' / ') : value);
+    })),
+  ];
+}
 
-  const csv = csvRows.map(r => r.join(',')).join('\n');
+async function downloadWidgetCSV(w) {
+  const result = await resolveWidgetData(w.id, buildDashboardQueryContext());
+  const payload = result?.exportData || result?.payload;
+  if (!payload) return;
+  let csvRows = [];
+  if (['bar-chart', 'line-chart', 'doughnut-chart'].includes(w.type)) {
+    csvRows = buildCsvRowsFromChartPayload(payload);
+  } else if (w.type === 'table') {
+    csvRows = buildCsvRowsFromTablePayload(payload);
+  }
+  if (!csvRows.length) return;
+
+  const csv = csvRows.map((row) => row.join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -2609,119 +3209,115 @@ function downloadWidgetCSV(w) {
 
 // ── CHARTS ─────────────────────────────────────────────────────
 function renderBarChart(container, w) {
-  const chartWrap = document.createElement('div');
-  chartWrap.className = 'chart-container';
-  const canvas = document.createElement('canvas');
-  chartWrap.appendChild(canvas);
-  container.appendChild(chartWrap);
-
-  requestAnimationFrame(() => {
-    const data = getMockBarData(w.id);
-    const chart = new Chart(canvas, {
-      type: 'bar',
-      data: data,
-      options: chartOptions(w)
+  renderResolvedWidget(container, w, (result) => {
+    container.innerHTML = '';
+    const chartWrap = document.createElement('div');
+    chartWrap.className = 'chart-container';
+    const canvas = document.createElement('canvas');
+    chartWrap.appendChild(canvas);
+    container.appendChild(chartWrap);
+    appendChartFutureNote(container, result);
+    requestAnimationFrame(() => {
+      const chart = new Chart(canvas, {
+        type: 'bar',
+        data: buildChartDisplayData(w, result),
+        options: chartOptions(w, result),
+      });
+      state.charts[w.id] = chart;
     });
-    state.charts[w.id] = chart;
   });
 }
 
 function renderLineChart(container, w) {
-  const chartWrap = document.createElement('div');
-  chartWrap.className = 'chart-container tall';
-  const canvas = document.createElement('canvas');
-  chartWrap.appendChild(canvas);
-  container.appendChild(chartWrap);
-
-  requestAnimationFrame(() => {
-    const data = getMockLineData(w.id);
-    const chart = new Chart(canvas, {
-      type: 'line',
-      data: data,
-      options: chartOptions(w)
+  renderResolvedWidget(container, w, (result) => {
+    container.innerHTML = '';
+    const chartWrap = document.createElement('div');
+    chartWrap.className = 'chart-container tall';
+    const canvas = document.createElement('canvas');
+    chartWrap.appendChild(canvas);
+    container.appendChild(chartWrap);
+    appendChartFutureNote(container, result);
+    requestAnimationFrame(() => {
+      const chart = new Chart(canvas, {
+        type: 'line',
+        data: buildChartDisplayData(w, result),
+        options: chartOptions(w, result),
+      });
+      state.charts[w.id] = chart;
     });
-    state.charts[w.id] = chart;
   });
 }
 
 function renderDoughnutChart(container, w) {
-  const chartWrap = document.createElement('div');
-  chartWrap.className = 'chart-container';
-  chartWrap.style.height = '180px';
-  chartWrap.style.maxWidth = '240px';
-  chartWrap.style.margin = '0 auto';
-  const canvas = document.createElement('canvas');
-  chartWrap.appendChild(canvas);
-  container.appendChild(chartWrap);
-
-  requestAnimationFrame(() => {
-    const chart = new Chart(canvas, {
-      type: 'doughnut',
-      data: getMockDoughnutData(w.id),
-      /*
-      data: {
-        labels: ['New contacts', 'Returning contacts'],
-        datasets: [{ data: [62, 38], backgroundColor: [CHART_COLORS.teal, CHART_COLORS.periwinkle], borderWidth: 0 }]
-      },
-      */
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { position: 'bottom', labels: {
-            font: { family: 'Inter', size: 11 }, padding: 12,
-            usePointStyle: true, pointStyle: 'circle',
-            generateLabels(chart) {
-              const bg = chart.data.datasets[0]?.backgroundColor || [];
-              const labels = chart.data.labels || [];
-              return labels.map((label, i) => ({
-                text:        label,
-                fillStyle:   Array.isArray(bg) ? bg[i] : bg,
-                strokeStyle: Array.isArray(bg) ? bg[i] : bg,
-                lineWidth:   0,
-                pointStyle:  'circle',
-                hidden:      false,
-                index:       i,
-              }));
-            }
-          } },
-          tooltip: {
-            backgroundColor: '#ffffff',
-            titleColor: '#18181b',
-            bodyColor: '#52525b',
-            borderColor: '#e4e4e7',
-            borderWidth: 1,
-            titleFont: { family: 'Inter', size: 12, weight: '600' },
-            bodyFont: { family: 'Inter', size: 12 },
-            padding: { top: 10, bottom: 10, left: 14, right: 14 },
-            cornerRadius: 10,
-            boxWidth: 8,
-            boxHeight: 8,
-            boxPadding: 4,
-            usePointStyle: true,
-            callbacks: {
-              labelPointStyle: () => ({ pointStyle: 'circle', rotation: 0 }),
-              labelColor(context) {
-                const bg = context.chart.data.datasets[0]?.backgroundColor || [];
-                const colour = Array.isArray(bg) ? bg[context.dataIndex] : bg;
-                return { borderColor: colour, backgroundColor: colour, borderWidth: 0 };
-              },
-              label(context) {
-                const label = context.label || '';
-                const value = context.formattedValue;
-                return `${label}    ${value}`;
-              }
-            }
-          }
-        }
-      }
+  renderResolvedWidget(container, w, (result) => {
+    container.innerHTML = '';
+    const chartWrap = document.createElement('div');
+    chartWrap.className = 'chart-container';
+    chartWrap.style.height = '180px';
+    chartWrap.style.maxWidth = '240px';
+    chartWrap.style.margin = '0 auto';
+    const canvas = document.createElement('canvas');
+    chartWrap.appendChild(canvas);
+    container.appendChild(chartWrap);
+    appendChartFutureNote(container, result);
+    requestAnimationFrame(() => {
+      const chart = new Chart(canvas, {
+        type: 'doughnut',
+        data: buildChartDisplayData(w, result),
+        options: doughnutChartOptions(w, result),
+      });
+      state.charts[w.id] = chart;
     });
-    state.charts[w.id] = chart;
   });
 }
 
+function chartTargetHasFutureData(target) {
+  return shouldHighlightFuturePart(target) || Boolean(target?.points?.some((point) => shouldHighlightFuturePart(point)));
+}
+
+function chartHasFutureData(result) {
+  const datasets = result?.provenance?.targets?.datasets || [];
+  return datasets.some((target) => chartTargetHasFutureData(target));
+}
+
+function appendChartFutureNote(container, result) {
+  if (!chartHasFutureData(result)) return;
+  const note = document.createElement('div');
+  note.className = 'chart-future-note';
+  note.textContent = 'Future-labelled series use mock fallback.';
+  container.appendChild(note);
+}
+
+function buildChartDisplayData(w, result) {
+  const data = cloneData(result.payload || {});
+  const datasetTargets = result.provenance?.targets?.datasets || [];
+  (data.datasets || []).forEach((dataset, datasetIndex) => {
+    const target = datasetTargets[datasetIndex];
+    const pointTargets = target?.points || [];
+    const pointHighlights = pointTargets.map((point) => shouldHighlightFuturePart(point));
+    dataset._futureFallback = chartTargetHasFutureData(target);
+    dataset._futurePoints = pointHighlights.slice();
+    if (dataset._futureFallback && !dataset.borderDash && (w.type === 'line-chart' || dataset.type === 'line' || !dataset.type)) {
+      dataset.borderDash = [6, 4];
+    }
+    if (pointHighlights.some(Boolean)) {
+      if (Array.isArray(dataset.backgroundColor)) {
+        dataset.borderColor = dataset.backgroundColor.map((color, index) => pointHighlights[index] ? '#1f2937' : color);
+        dataset.borderWidth = pointHighlights.map((highlight) => highlight ? 2 : 0);
+      } else if (dataset.backgroundColor) {
+        dataset.borderColor = Array.from({ length: dataset.data?.length || 0 }, (_, index) => pointHighlights[index] ? '#1f2937' : dataset.backgroundColor);
+        dataset.borderWidth = pointHighlights.map((highlight) => highlight ? 2 : 0);
+      }
+      if (w.type === 'line-chart' || dataset.type === 'line' || (!dataset.type && dataset.borderColor)) {
+        dataset.pointRadius = pointHighlights.map((highlight) => highlight ? 3 : 0);
+        dataset.pointHoverRadius = pointHighlights.map((highlight) => highlight ? 5 : 4);
+      }
+    }
+  });
+  return data;
+}
+
 function getMockDoughnutData(id) {
-  if (state.mockData.charts[id]) return cloneData(state.mockData.charts[id]);
   const salesChLabels = ['WhatsApp', 'Voice', 'Email', 'Live chat', 'Telegram', 'TikTok'];
   const salesChColors = [CHART_COLORS.teal, CHART_COLORS.blue, CHART_COLORS.periwinkle, CHART_COLORS.yellow, CHART_COLORS.purple, CHART_COLORS.tealLight];
   let data;
@@ -2741,11 +3337,10 @@ function getMockDoughnutData(id) {
       datasets: [{ data: [62, 38], backgroundColor: [CHART_COLORS.teal, CHART_COLORS.periwinkle], borderWidth: 0 }]
     };
   }
-  state.mockData.charts[id] = data;
   return cloneData(data);
 }
 
-function chartOptions(w) {
+function chartOptions(w, result) {
   const opts = {
     responsive: true,
     maintainAspectRatio: false,
@@ -2762,21 +3357,21 @@ function chartOptions(w) {
           pointStyle: 'circle',
           generateLabels(chart) {
             const datasets = chart.data.datasets;
-            // Single-dataset bar chart with per-bar colours → no legend (x-axis labels already name each bar)
             if (datasets.length === 1 && Array.isArray(datasets[0].backgroundColor) && datasets[0].backgroundColor.length > 1) {
               return [];
             }
-            // Default: one legend item per dataset
             const items = Chart.defaults.plugins.legend.labels.generateLabels(chart);
             items.forEach((item, i) => {
               const ds = datasets[i];
               if (!ds) return;
-              // Solid colour: line charts use borderColor, bar charts use backgroundColor
               const colour = ds.borderColor || (Array.isArray(ds.backgroundColor) ? ds.backgroundColor[0] : ds.backgroundColor) || item.fillStyle;
-              item.fillStyle   = colour;
-              item.strokeStyle = colour;
-              item.lineWidth   = 0;
-              item.pointStyle  = 'circle';
+              item.fillStyle = Array.isArray(colour) ? colour[0] : colour;
+              item.strokeStyle = Array.isArray(colour) ? colour[0] : colour;
+              item.lineWidth = 0;
+              item.pointStyle = 'circle';
+              if (state.dataUI.futureHighlightsEnabled && ds._futureFallback) {
+                item.text += ' · Future';
+              }
             });
             return items;
           }
@@ -2803,13 +3398,17 @@ function chartOptions(w) {
             const colour = ds.borderColor ||
               (Array.isArray(ds.backgroundColor) ? ds.backgroundColor[context.dataIndex] : ds.backgroundColor) ||
               '#18181b';
-            return { borderColor: colour, backgroundColor: colour, borderWidth: 0 };
+            const resolved = Array.isArray(colour) ? (colour[context.dataIndex] || colour[0]) : colour;
+            return { borderColor: resolved, backgroundColor: resolved, borderWidth: 0 };
           },
           label(context) {
             const ds = context.dataset;
             const label = ds.label || '';
             const value = context.formattedValue;
-            return `  ${label}: ${value}`;
+            const target = result?.provenance?.targets?.datasets?.[context.datasetIndex];
+            const point = target?.points?.[context.dataIndex];
+            const suffix = chartTargetHasFutureData(target) || shouldHighlightFuturePart(point) ? ' · Future' : '';
+            return `  ${label}: ${value}${suffix}`;
           }
         }
       }
@@ -2850,7 +3449,7 @@ function chartOptions(w) {
     };
   }
   // Dual y-axis for call abandonment trend
-  if (w.id === 'vc-abandonment-trend') {
+  if (w.id === 'op-vc-abandonment-trend' || w.id === 'vc-abandonment-trend') {
     opts.scales.y.title = { display: true, text: 'Abandon %', font: { family: 'Inter', size: 11 } };
     opts.scales.y1 = {
       type: 'linear',
@@ -2883,8 +3482,67 @@ function chartOptions(w) {
   return opts;
 }
 
+function doughnutChartOptions(w, result) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: {
+          font: { family: 'Inter', size: 11 },
+          padding: 12,
+          usePointStyle: true,
+          pointStyle: 'circle',
+          generateLabels(chart) {
+            const bg = chart.data.datasets[0]?.backgroundColor || [];
+            const labels = chart.data.labels || [];
+            const points = result?.provenance?.targets?.datasets?.[0]?.points || [];
+            return labels.map((label, i) => ({
+              text: `${label}${shouldHighlightFuturePart(points[i]) ? ' · Future' : ''}`,
+              fillStyle: Array.isArray(bg) ? bg[i] : bg,
+              strokeStyle: Array.isArray(bg) ? bg[i] : bg,
+              lineWidth: 0,
+              pointStyle: 'circle',
+              hidden: false,
+              index: i,
+            }));
+          }
+        }
+      },
+      tooltip: {
+        backgroundColor: '#ffffff',
+        titleColor: '#18181b',
+        bodyColor: '#52525b',
+        borderColor: '#e4e4e7',
+        borderWidth: 1,
+        titleFont: { family: 'Inter', size: 12, weight: '600' },
+        bodyFont: { family: 'Inter', size: 12 },
+        padding: { top: 10, bottom: 10, left: 14, right: 14 },
+        cornerRadius: 10,
+        boxWidth: 8,
+        boxHeight: 8,
+        boxPadding: 4,
+        usePointStyle: true,
+        callbacks: {
+          labelPointStyle: () => ({ pointStyle: 'circle', rotation: 0 }),
+          labelColor(context) {
+            const bg = context.chart.data.datasets[0]?.backgroundColor || [];
+            const colour = Array.isArray(bg) ? bg[context.dataIndex] : bg;
+            return { borderColor: colour, backgroundColor: colour, borderWidth: 0 };
+          },
+          label(context) {
+            const point = result?.provenance?.targets?.datasets?.[0]?.points?.[context.dataIndex];
+            const suffix = shouldHighlightFuturePart(point) ? ' · Future' : '';
+            return `${context.label || ''}    ${context.formattedValue}${suffix}`;
+          }
+        }
+      }
+    }
+  };
+}
+
 function getMockBarData(id) {
-  if (state.mockData.charts[id]) return cloneData(state.mockData.charts[id]);
   const labels7 = days7();
   const hours = hours24();
   const channels = ['Email', 'WhatsApp', 'Live chat', 'Phone', 'Instagram', 'Facebook'];
@@ -2971,6 +3629,7 @@ function getMockBarData(id) {
         datasets: [{ label: 'Count', data: handoffReasons.map(() => rand(30, 400)), backgroundColor: [CHART_COLORS.purple, CHART_COLORS.blue, CHART_COLORS.teal, CHART_COLORS.yellow, CHART_COLORS.periwinkle], borderRadius: 6 }]
       };
       break;
+    case 'un-vc-inbound-outbound':
     case 'vc-inbound-outbound':
       data = {
         labels: labels7,
@@ -2982,6 +3641,7 @@ function getMockBarData(id) {
         ]
       };
       break;
+    case 'ov-vc-calls-by-hour':
     case 'vc-calls-by-hour': {
       const hrs = hours24();
       data = {
@@ -2993,6 +3653,7 @@ function getMockBarData(id) {
       };
       break;
     }
+    case 'op-vc-calls-by-team':
     case 'vc-calls-by-team': {
       const teamLabels = ['Sales team', 'SMB Central', 'Mid-Market', 'Expansion', 'Retention', 'Core Services'];
       data = {
@@ -3004,6 +3665,7 @@ function getMockBarData(id) {
       };
       break;
     }
+    case 'op-vc-avg-wait-by-team':
     case 'vc-avg-wait-by-team': {
       const waitTeams = ['Sales team', 'SMB Central', 'Mid-Market', 'Expansion', 'Retention', 'Core Services'];
       data = {
@@ -3012,6 +3674,7 @@ function getMockBarData(id) {
       };
       break;
     }
+    case 'op-vc-duration-by-team':
     case 'vc-duration-by-team': {
       const durTeams = ['Sales team', 'SMB Central', 'Mid-Market', 'Expansion', 'Retention', 'Core Services'];
       data = {
@@ -3023,6 +3686,7 @@ function getMockBarData(id) {
       };
       break;
     }
+    case 'un-vc-duration-inbound-outbound':
     case 'vc-duration-inbound-outbound':
       data = {
         labels: labels7,
@@ -3046,12 +3710,10 @@ function getMockBarData(id) {
         datasets: [{ label: 'Count', data: labels7.map(() => rand(50, 500)), backgroundColor: CHART_COLORS.teal, borderRadius: 6 }]
       };
   }
-  state.mockData.charts[id] = data;
   return cloneData(data);
 }
 
 function getMockLineData(id) {
-  if (state.mockData.charts[id]) return cloneData(state.mockData.charts[id]);
   const labels = days7();
   let data;
   switch (id) {
@@ -3102,6 +3764,7 @@ function getMockLineData(id) {
         ]
       };
       break;
+    case 'op-vc-abandonment-trend':
     case 'vc-abandonment-trend':
       data = {
         labels,
@@ -3117,7 +3780,6 @@ function getMockLineData(id) {
         datasets: [{ label: 'Value', data: labels.map(() => rand(100,800)), borderColor: CHART_COLORS.teal, tension: .3, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2 }]
       };
   }
-  state.mockData.charts[id] = data;
   return cloneData(data);
 }
 
@@ -3137,235 +3799,238 @@ function agentAvatar(name) {
   return `<span class="agent-avatar" style="background:${color}">${letter}</span>`;
 }
 
-function renderTable(container, w) {
-  if (w.id === 'op-workload-agent') {
-    // Determine which agents to show — filtered to selected team's members if applicable
-    const teamData = state.teamFilter && state.teamFilter !== 'All teams'
-      ? getPrototypeTeamByName(state.teamFilter)
-      : null;
-    const allAgents = ['Victor Montala', 'Greg Aquino', 'Isabella Escobar', 'Federico Lai', 'Donovan van der Weerd', 'Deborah Pia', 'Rowan Milwid', 'Dmytro Hachok'];
-    const agents = teamData && Array.isArray(teamData.members) && teamData.members.length
-      ? teamData.members
-      : allAgents;
-
-    // Cache keyed by widget id + team so switching teams generates fresh mock data
-    const cacheKey = w.id + '::' + (state.teamFilter || 'All teams');
-    if (!state.mockData.tables[cacheKey]) {
-      state.mockData.tables[cacheKey] = agents.map(a => ({
-        agent: a,
-        assigned: rand(20,200),
-        firstResponse: `${rand(5,60)}m ${rand(0,59)}s`,
-        totalResolution: `${rand(1,48)}h ${rand(0,59)}m`,
-        closed: rand(10,180),
-        messages: rand(50,500),
-        comments: rand(5,80),
-      }));
+function buildMockTablePayload(widget, context) {
+  const teamData = context.teamFilter && context.teamFilter !== 'All teams'
+    ? getPrototypeTeamByName(context.teamFilter)
+    : null;
+  const allAgents = ['Victor Montala', 'Greg Aquino', 'Isabella Escobar', 'Federico Lai', 'Donovan van der Weerd', 'Deborah Pia', 'Rowan Milwid', 'Dmytro Hachok'];
+  switch (widget.id) {
+    case 'op-workload-agent': {
+      const agents = teamData?.members?.length ? teamData.members : allAgents;
+      return {
+        columns: [
+          { key: 'agent', label: 'Agent', type: 'agent' },
+          { key: 'assigned', label: 'Assigned tickets', type: 'number' },
+          { key: 'firstResponse', label: 'First response time', type: 'text' },
+          { key: 'totalResolution', label: 'Total resolution time', type: 'text' },
+          { key: 'closed', label: 'Closed tickets', type: 'number' },
+          { key: 'messages', label: 'Messages sent', type: 'number' },
+          { key: 'comments', label: 'Internal comments', type: 'number' },
+        ],
+        rows: agents.map((agent) => ({
+          agent,
+          assigned: rand(20, 200),
+          firstResponse: `${rand(5, 60)}m ${rand(0, 59)}s`,
+          totalResolution: `${rand(1, 48)}h ${rand(0, 59)}m`,
+          closed: rand(10, 180),
+          messages: rand(50, 500),
+          comments: rand(5, 80),
+        })),
+      };
     }
-    const rows = state.mockData.tables[cacheKey];
-    let html = `<div style="overflow-x:auto"><table class="widget-table"><thead><tr>
-      <th>Agent</th><th>Assigned tickets</th><th>First response time</th><th>Total resolution time</th><th>Closed tickets</th><th>Messages sent</th><th>Internal comments</th>
-    </tr></thead><tbody>`;
-    rows.forEach(r => {
-      html += `<tr>
-        <td><div class="agent-cell">${agentAvatar(r.agent)}<span style="font-weight:500">${r.agent}</span></div></td>
-        <td>${r.assigned}</td>
-        <td>${r.firstResponse}</td>
-        <td>${r.totalResolution}</td>
-        <td>${r.closed}</td>
-        <td>${r.messages}</td>
-        <td>${r.comments}</td>
-      </tr>`;
-    });
-    html += '</tbody></table></div>';
-    container.innerHTML = html;
-  } else if (w.id === 'un-vc-channel-performance') {
-    const vcChannels = ['Support EN', 'Support NL', 'Sales', 'Billing', 'Onboarding', 'Tier-2'];
-    const cacheKey = w.id + '::' + (state.teamFilter || 'All teams');
-    if (!state.mockData.tables[cacheKey]) {
-      state.mockData.tables[cacheKey] = vcChannels.map(ch => ({
-        channel: ch,
-        totalCalls: rand(80, 500),
-        missedCalls: rand(3, 40),
-        avgWait: `${rand(10, 120)}s`,
-        avgDuration: `${rand(1, 8)}m ${rand(0, 59)}s`,
-        answerRate: `${rand(75, 99)}%`,
-      }));
+    case 'un-vc-channel-performance': {
+      const channels = ['Support EN', 'Support NL', 'Sales', 'Billing', 'Onboarding', 'Tier-2'];
+      return {
+        columns: [
+          { key: 'channel', label: 'Channel', type: 'text' },
+          { key: 'totalCalls', label: 'Total calls', type: 'number' },
+          { key: 'missedCalls', label: 'Missed calls', type: 'number' },
+          { key: 'avgWait', label: 'Avg wait', type: 'text' },
+          { key: 'avgDuration', label: 'Avg duration', type: 'text' },
+          { key: 'answerRate', label: 'Answer rate', type: 'text' },
+        ],
+        rows: channels.map((channel) => ({
+          channel,
+          totalCalls: rand(80, 500),
+          missedCalls: rand(3, 40),
+          avgWait: `${rand(10, 120)}s`,
+          avgDuration: `${rand(1, 8)}m ${rand(0, 59)}s`,
+          answerRate: `${rand(75, 99)}%`,
+        })),
+      };
     }
-    const rows = state.mockData.tables[cacheKey];
-    let html = `<div style="overflow-x:auto"><table class="widget-table"><thead><tr>
-      <th>Channel</th><th>Total calls</th><th>Missed calls</th><th>Avg wait</th><th>Avg duration</th><th>Answer rate</th>
-    </tr></thead><tbody>`;
-    rows.forEach(r => {
-      html += `<tr>
-        <td style="font-weight:500">${r.channel}</td>
-        <td>${r.totalCalls}</td>
-        <td>${r.missedCalls}</td>
-        <td>${r.avgWait}</td>
-        <td>${r.avgDuration}</td>
-        <td>${r.answerRate}</td>
-      </tr>`;
-    });
-    html += '</tbody></table></div>';
-    container.innerHTML = html;
-  } else if (w.id === 'op-channel-perf') {
-    const channels = filterConfigs['filter-channel'].groups.filter(g => g.children).flatMap(g => g.children);
-    const cacheKey = w.id + '::cache';
-    if (!state.mockData.tables[cacheKey]) {
-      state.mockData.tables[cacheKey] = channels.map(ch => ({
-        channel: ch,
-        resolutionTime: `${rand(1,24)}h ${rand(0,59)}m`,
-        firstResponse: `${rand(1,60)}m ${rand(0,59)}s`,
-        slaCompliance: rand(70, 99) + '%',
-        closedTickets: rand(50, 800),
-        openTickets: rand(20, 300),
-      }));
+    case 'op-channel-perf': {
+      const channels = filterConfigs['filter-channel'].groups.filter((group) => group.children).flatMap((group) => group.children);
+      return {
+        columns: [
+          { key: 'channel', label: 'Channel', type: 'channel' },
+          { key: 'resolutionTime', label: 'Resolution time', type: 'text' },
+          { key: 'firstResponse', label: 'First response time', type: 'text' },
+          { key: 'slaCompliance', label: 'SLA compliance', type: 'sla' },
+          { key: 'closedTickets', label: 'Closed tickets', type: 'number' },
+          { key: 'openTickets', label: 'Open tickets', type: 'number' },
+        ],
+        rows: channels.map((channel) => ({
+          channel,
+          resolutionTime: `${rand(1, 24)}h ${rand(0, 59)}m`,
+          firstResponse: `${rand(1, 60)}m ${rand(0, 59)}s`,
+          slaCompliance: `${rand(70, 99)}%`,
+          closedTickets: rand(50, 800),
+          openTickets: rand(20, 300),
+        })),
+      };
     }
-    const rows = state.mockData.tables[cacheKey];
-    let html = `<div style="overflow-x:auto"><table class="widget-table"><thead><tr>
-      <th>Channel</th>
-      <th>Resolution time</th>
-      <th>First response time</th>
-      <th>SLA compliance</th>
-      <th>Closed tickets</th>
-      <th>Open tickets</th>
-    </tr></thead><tbody>`;
-    rows.forEach(r => {
-      const isSelected = state.channelFilter.has(r.channel);
-      const slaNum = parseInt(r.slaCompliance);
-      const slaCls = slaNum >= 90 ? 'sla-good' : slaNum >= 80 ? 'sla-warn' : 'sla-bad';
-      html += `<tr class="channel-row${isSelected ? ' channel-row-selected' : ''}" data-channel="${r.channel}">
-        <td><span class="channel-pill">${getChannelIconHTML(r.channel)}<span>${r.channel}</span></span></td>
-        <td>${r.resolutionTime}</td>
-        <td>${r.firstResponse}</td>
-        <td><span class="sla-value ${slaCls}">${r.slaCompliance}</span></td>
-        <td>${r.closedTickets.toLocaleString()}</td>
-        <td>${r.openTickets.toLocaleString()}</td>
-      </tr>`;
-    });
-    html += '</tbody></table></div>';
-    container.innerHTML = html;
-
-    // Wire row click → channel filter (toggle: click selected row to deselect)
-    container.querySelectorAll('.channel-row').forEach(row => {
-      row.addEventListener('click', () => {
-        const ch = row.dataset.channel;
-        if (state.channelFilter.has(ch)) state.channelFilter.delete(ch);
-        else state.channelFilter.add(ch);
-        updateChannelChipLabel();
-        [...state.loadedSections].forEach(s => remountSection(s));
-      });
-    });
-  } else if (w.id === 'op-sales-performance') {
-    const salesAgents = ['Ava Laurent', 'Noah Müller', 'Mila Santos', 'Youssef El Idrissi', 'Sofia Ivanova', 'Liam O\'Brien'];
-    const cacheKey = w.id + '::cache';
-    if (!state.mockData.tables[cacheKey]) {
-      state.mockData.tables[cacheKey] = salesAgents.map(a => ({
-        agent: a,
-        leads: rand(40, 180),
-        deals: rand(12, 70),
-        pipeline: `€${(rand(8, 60) * 1000).toLocaleString()}`,
-        revenue: `€${(rand(3, 35) * 1000).toLocaleString()}`,
-        winRate: `${rand(20, 65)}%`,
-      }));
+    case 'op-sales-performance': {
+      const agents = ['Ava Laurent', 'Noah Müller', 'Mila Santos', 'Youssef El Idrissi', 'Sofia Ivanova', 'Liam O\'Brien'];
+      return {
+        columns: [
+          { key: 'agent', label: 'Agent', type: 'agent' },
+          { key: 'leads', label: 'Leads', type: 'number' },
+          { key: 'deals', label: 'Deals created', type: 'number' },
+          { key: 'pipeline', label: 'Pipeline value', type: 'text' },
+          { key: 'revenue', label: 'Revenue', type: 'text' },
+          { key: 'winRate', label: 'Win rate', type: 'text' },
+        ],
+        rows: agents.map((agent) => ({
+          agent,
+          leads: rand(40, 180),
+          deals: rand(12, 70),
+          pipeline: `€${(rand(8, 60) * 1000).toLocaleString()}`,
+          revenue: `€${(rand(3, 35) * 1000).toLocaleString()}`,
+          winRate: `${rand(20, 65)}%`,
+        })),
+      };
     }
-    const rows = state.mockData.tables[cacheKey];
-    let html = `<div style="overflow-x:auto"><table class="widget-table"><thead><tr>
-      <th>Agent</th><th>Leads</th><th>Deals created</th><th>Pipeline value</th><th>Revenue</th><th>Win rate</th>
-    </tr></thead><tbody>`;
-    rows.forEach(r => {
-      html += `<tr>
-        <td><div class="agent-cell">${agentAvatar(r.agent)}<span style="font-weight:500">${r.agent}</span></div></td>
-        <td>${r.leads}</td>
-        <td>${r.deals}</td>
-        <td>${r.pipeline}</td>
-        <td>${r.revenue}</td>
-        <td>${r.winRate}</td>
-      </tr>`;
-    });
-    html += '</tbody></table></div>';
-    container.innerHTML = html;
-  } else if (w.id === 'op-channel-stage-matrix') {
-    const salesCh = ['WhatsApp', 'Voice', 'Email', 'Live chat', 'Telegram', 'TikTok'];
-    const stages  = ['New', 'Qualified', 'Proposal', 'Negotiation', 'Won', 'Lost'];
-    const cacheKey = w.id + '::cache';
-    if (!state.mockData.tables[cacheKey]) {
-      state.mockData.tables[cacheKey] = salesCh.map(ch => {
-        const counts = stages.map((s, i) => rand(Math.max(1, 80 - i * 12), Math.max(5, 220 - i * 35)));
-        return { channel: ch, counts, total: counts.reduce((a, b) => a + b, 0) };
-      });
+    case 'op-channel-stage-matrix': {
+      const channels = ['WhatsApp', 'Voice', 'Email', 'Live chat', 'Telegram', 'TikTok'];
+      return {
+        columns: [
+          { key: 'channel', label: 'Channel', type: 'text' },
+          { key: 'new', label: 'New', type: 'number' },
+          { key: 'qualified', label: 'Qualified', type: 'number' },
+          { key: 'proposal', label: 'Proposal', type: 'number' },
+          { key: 'negotiation', label: 'Negotiation', type: 'number' },
+          { key: 'won', label: 'Won', type: 'number' },
+          { key: 'lost', label: 'Lost', type: 'number' },
+          { key: 'total', label: 'Total', type: 'number' },
+        ],
+        rows: channels.map((channel) => {
+          const counts = {
+            new: rand(80, 220),
+            qualified: rand(68, 185),
+            proposal: rand(45, 140),
+            negotiation: rand(28, 96),
+            won: rand(12, 55),
+            lost: rand(10, 48),
+          };
+          return {
+            channel,
+            ...counts,
+            total: Object.values(counts).reduce((sum, value) => sum + value, 0),
+          };
+        }),
+      };
     }
-    const rows = state.mockData.tables[cacheKey];
-    let html = `<div style="overflow-x:auto"><table class="widget-table"><thead><tr>
-      <th>Channel</th>${stages.map(s => `<th>${s}</th>`).join('')}<th>Total</th>
-    </tr></thead><tbody>`;
-    rows.forEach(r => {
-      html += `<tr>
-        <td style="font-weight:500">${r.channel}</td>
-        ${r.counts.map(c => `<td>${c}</td>`).join('')}
-        <td><strong>${r.total}</strong></td>
-      </tr>`;
-    });
-    html += '</tbody></table></div>';
-    container.innerHTML = html;
+    default:
+      return { columns: [], rows: [] };
   }
+}
+
+function formatTableCellValue(value) {
+  if (typeof value === 'number') return value.toLocaleString();
+  return escapeHtml(value);
+}
+
+function buildTableCellContent(w, column, row, rowTarget) {
+  const cellTarget = rowTarget?.fields?.[column.key];
+  const inlineBadge = buildFutureInlineBadge(cellTarget);
+  if (column.type === 'agent') {
+    return `<div class="agent-cell">${agentAvatar(row[column.key])}<span style="font-weight:500">${escapeHtml(row[column.key])}</span>${inlineBadge}</div>`;
+  }
+  if (column.type === 'channel') {
+    return `<span class="channel-pill">${getChannelIconHTML(row[column.key])}<span>${escapeHtml(row[column.key])}</span></span>${inlineBadge}`;
+  }
+  if (column.type === 'sla') {
+    const slaValue = parseInt(row[column.key], 10);
+    const slaClass = slaValue >= 90 ? 'sla-good' : slaValue >= 80 ? 'sla-warn' : 'sla-bad';
+    return `<span class="sla-value ${slaClass}">${escapeHtml(row[column.key])}</span>${inlineBadge}`;
+  }
+  return `${formatTableCellValue(row[column.key])}${inlineBadge}`;
+}
+
+function renderTable(container, w) {
+  renderResolvedWidget(container, w, (result) => {
+    const payload = result.payload || { columns: [], rows: [] };
+    const rowTargets = result.provenance?.targets?.rows || [];
+    let html = `<div style="overflow-x:auto"><table class="widget-table"><thead><tr>${payload.columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join('')}</tr></thead><tbody>`;
+    payload.rows.forEach((row, rowIndex) => {
+      const rowTarget = rowTargets[rowIndex];
+      const rowClasses = [];
+      if (w.id === 'op-channel-perf') rowClasses.push('channel-row');
+      if (w.id === 'op-channel-perf' && state.channelFilter.has(row.channel)) rowClasses.push('channel-row-selected');
+      if (shouldHighlightFuturePart(rowTarget)) rowClasses.push('widget-table-row-future');
+      html += `<tr class="${rowClasses.join(' ')}" ${w.id === 'op-channel-perf' ? `data-channel="${escapeHtml(row.channel)}"` : ''}>`;
+      payload.columns.forEach((column) => {
+        const cellTarget = rowTarget?.fields?.[column.key];
+        html += `<td class="${shouldHighlightFuturePart(cellTarget) ? 'widget-table-cell-future' : ''}">${buildTableCellContent(w, column, row, rowTarget)}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+
+    if (w.id === 'op-channel-perf') {
+      container.querySelectorAll('.channel-row').forEach((row) => {
+        row.addEventListener('click', () => {
+          const channel = row.dataset.channel;
+          if (state.channelFilter.has(channel)) state.channelFilter.delete(channel);
+          else state.channelFilter.add(channel);
+          updateChannelChipLabel();
+          [...state.loadedSections].forEach((sectionId) => remountSection(sectionId));
+        });
+      });
+    }
+  });
+}
+
+function buildMockAgentStatusPayload(widget, context) {
+  const baseAgents = [
+    { name: 'Victor Montala', status: 'On a call' },
+    { name: 'Greg Aquino', status: 'Online' },
+    { name: 'Isabella Escobar', status: 'Away' },
+    { name: 'Federico Lai', status: 'Online' },
+    { name: 'Donovan van der Weerd', status: 'Offline' },
+    { name: 'Deborah Pia', status: 'On a call' },
+  ];
+  const teamData = context.teamFilter && context.teamFilter !== 'All teams'
+    ? getPrototypeTeamByName(context.teamFilter)
+    : null;
+  const items = teamData?.members?.length
+    ? baseAgents.filter((agent) => teamData.members.includes(agent.name))
+    : baseAgents;
+  return { items };
+}
+
+function getAgentStatusClass(status) {
+  return {
+    'Online': 'status-online',
+    'On a call': 'status-oncall',
+    'Away': 'status-away',
+    'Offline': 'status-offline',
+  }[status] || '';
 }
 
 // ── AGENT ONLINE STATUS ─────────────────────────────────────────
 function renderAgentOnlineStatus(container, w) {
-  const agents = [
-    { name: 'Victor Montala',        status: 'On a call' },
-    { name: 'Greg Aquino',           status: 'Online'    },
-    { name: 'Isabella Escobar',      status: 'Away'      },
-    { name: 'Federico Lai',          status: 'Online'    },
-    { name: 'Donovan van der Weerd', status: 'Offline'   },
-    { name: 'Deborah Pia',           status: 'On a call' },
-  ];
-  const statusClass = {
-    'Online':    'status-online',
-    'On a call': 'status-oncall',
-    'Away':      'status-away',
-    'Offline':   'status-offline',
-  };
-  container.innerHTML = agents.map(a => `
-    <div class="list-item">
-      <div class="agent-cell">
-        ${agentAvatar(a.name)}
-        <span style="font-weight:500;color:var(--gray-800)">${a.name}</span>
+  renderResolvedWidget(container, w, (result) => {
+    const items = result.payload?.items || [];
+    const itemTargets = result.provenance?.targets?.items || [];
+    container.innerHTML = items.map((agent, index) => `
+      <div class="list-item${shouldHighlightFuturePart(itemTargets[index]) ? ' future-inline-row' : ''}">
+        <div class="agent-cell">
+          ${agentAvatar(agent.name)}
+          <span style="font-weight:500;color:var(--gray-800)">${escapeHtml(agent.name)}</span>
+          ${buildFutureInlineBadge(itemTargets[index]?.fields?.name || itemTargets[index])}
+        </div>
+        <span class="agent-status-badge ${getAgentStatusClass(agent.status)}">${escapeHtml(agent.status)}</span>
       </div>
-      <span class="agent-status-badge ${statusClass[a.status] || ''}">${a.status}</span>
-    </div>`).join('');
-}
-
-// ── LIST ───────────────────────────────────────────────────────
-function renderList(container, w) {
-  const items = getMockListItems(w.id);
-  let html = '';
-  items.forEach(item => {
-    html += `<div class="list-item">
-      <span class="list-item-label">${item.label}</span>
-      <span>
-        <span class="list-item-value">${item.value}</span>
-        <span class="list-item-trend ${item.trend >= 0 ? 'kpi-trend up' : 'kpi-trend down'}">${item.trend >= 0 ? '\u2191' : '\u2193'} ${Math.abs(item.trend)}%</span>
-      </span>
-    </div>`;
+    `).join('');
   });
-
-  // Expandable detail
-  html += `<button class="expandable-toggle" onclick="this.nextElementSibling.classList.toggle('open'); this.textContent = this.nextElementSibling.classList.contains('open') ? '\u25B2 Show less' : '\u25BC Show more'">
-    \u25BC Show more
-  </button>
-  <div class="expandable-content">
-    <div class="list-item"><span class="list-item-label">Additional detail 1</span><span class="list-item-value">${rand(10,100)}</span></div>
-    <div class="list-item"><span class="list-item-label">Additional detail 2</span><span class="list-item-value">${rand(10,100)}</span></div>
-  </div>`;
-
-  container.innerHTML = html;
 }
 
-function getMockListItems(id) {
-  if (state.mockData.lists[id]) return state.mockData.lists[id];
+function buildMockListPayload(widget) {
   let items;
-  switch (id) {
+  switch (widget.id) {
     case 'ov-intent-trends':
       items = [
         { label: 'Pricing inquiry', value: '1,284', trend: 23 },
@@ -3401,118 +4066,175 @@ function getMockListItems(id) {
         { label: 'Harmful content filter', value: '2 stops', trend: -1 },
       ];
       break;
-    case 'vc-agent-online-status':
-      items = [
-        { label: 'Victor Montala', value: 'On a call', trend: 0 },
-        { label: 'Greg Aquino', value: 'Online', trend: 0 },
-        { label: 'Isabella Escobar', value: 'Away', trend: 0 },
-        { label: 'Federico Lai', value: 'Online', trend: 0 },
-        { label: 'Donovan van der Weerd', value: 'Offline', trend: 0 },
-        { label: 'Deborah Pia', value: 'On a call', trend: 0 },
-      ];
-      break;
     default:
       items = [
-        { label: 'Item A', value: rand(100,999).toString(), trend: rand(-20,20) },
-        { label: 'Item B', value: rand(100,999).toString(), trend: rand(-20,20) },
-        { label: 'Item C', value: rand(100,999).toString(), trend: rand(-20,20) },
+        { label: 'Item A', value: rand(100, 999).toString(), trend: rand(-20, 20) },
+        { label: 'Item B', value: rand(100, 999).toString(), trend: rand(-20, 20) },
+        { label: 'Item C', value: rand(100, 999).toString(), trend: rand(-20, 20) },
       ];
       break;
   }
-  state.mockData.lists[id] = items;
-  return items;
+  return {
+    items,
+    additionalItems: [
+      { label: 'Additional detail 1', value: rand(10, 100).toString() },
+      { label: 'Additional detail 2', value: rand(10, 100).toString() },
+    ],
+  };
+}
+
+// ── LIST ───────────────────────────────────────────────────────
+function renderList(container, w) {
+  renderResolvedWidget(container, w, (result) => {
+    const payload = result.payload || { items: [], additionalItems: [] };
+    const itemTargets = result.provenance?.targets?.items || [];
+    let html = '';
+    payload.items.forEach((item, index) => {
+      const itemTarget = itemTargets[index];
+      html += `
+        <div class="list-item${shouldHighlightFuturePart(itemTarget) ? ' future-inline-row' : ''}">
+          <span class="list-item-label">${escapeHtml(item.label)}</span>
+          <span>
+            <span class="list-item-value">${escapeHtml(item.value)}${buildFutureInlineBadge(itemTarget?.fields?.value || itemTarget)}</span>
+            <span class="list-item-trend ${item.trend >= 0 ? 'kpi-trend up' : 'kpi-trend down'}">${item.trend >= 0 ? '\u2191' : '\u2193'} ${Math.abs(item.trend)}%</span>
+          </span>
+        </div>
+      `;
+    });
+    if (payload.additionalItems?.length) {
+      html += `<button class="expandable-toggle" onclick="this.nextElementSibling.classList.toggle('open'); this.textContent = this.nextElementSibling.classList.contains('open') ? '\u25B2 Show less' : '\u25BC Show more'">\u25BC Show more</button>`;
+      html += `<div class="expandable-content">${payload.additionalItems.map((item) => `
+        <div class="list-item">
+          <span class="list-item-label">${escapeHtml(item.label)}</span>
+          <span class="list-item-value">${escapeHtml(item.value)}</span>
+        </div>
+      `).join('')}</div>`;
+    }
+    container.innerHTML = html;
+  });
 }
 
 // ── LIST WITH ACTIONS (approve/reject) ─────────────────────────
+function buildMockListActionsPayload() {
+  return {
+    items: [
+      { id: 'suggestion-0', title: 'Add article: "How to connect API keys"', source: 'AI analysis of 42 fallback tickets' },
+      { id: 'suggestion-1', title: 'Update article: "Pricing plans overview"', source: 'Customer feedback + escalation data' },
+      { id: 'suggestion-2', title: 'Add article: "Mobile app troubleshooting"', source: 'Emerging intent detection' },
+    ],
+  };
+}
+
 function renderListActions(container, w) {
-  const suggestions = [
-    { title: 'Add article: "How to connect API keys"', source: 'AI analysis of 42 fallback tickets' },
-    { title: 'Update article: "Pricing plans overview"', source: 'Customer feedback + escalation data' },
-    { title: 'Add article: "Mobile app troubleshooting"', source: 'Emerging intent detection' },
-  ];
-  let html = '';
-  suggestions.forEach((s, i) => {
-    html += `<div class="list-item" id="suggestion-${i}" style="flex-wrap:wrap;gap:8px;">
-      <div style="flex:1;min-width:200px;">
-        <div style="font-weight:500;color:var(--gray-800)">${s.title}</div>
-        <div style="font-size:11px;color:var(--gray-400);margin-top:2px">${s.source}</div>
-      </div>
-      <div style="display:flex;gap:6px;">
-        <button class="btn btn-sm btn-accent" onclick="this.closest('.list-item').style.opacity='0.4'; this.closest('.list-item').querySelector('.badge-result')?.remove(); this.parentElement.innerHTML='<span class=\\'badge badge-green\\'>Approved</span>'">Approve</button>
-        <button class="btn btn-sm btn-danger-outline" onclick="this.closest('.list-item').style.opacity='0.4'; this.parentElement.innerHTML='<span class=\\'badge badge-red\\'>Rejected</span>'">Reject</button>
-      </div>
-    </div>`;
+  renderResolvedWidget(container, w, (result) => {
+    const items = result.payload?.items || [];
+    const itemTargets = result.provenance?.targets?.items || [];
+    let html = '';
+    items.forEach((item, index) => {
+      html += `
+        <div class="list-item${shouldHighlightFuturePart(itemTargets[index]) ? ' future-inline-row' : ''}" id="${escapeHtml(item.id)}" style="flex-wrap:wrap;gap:8px;">
+          <div style="flex:1;min-width:200px;">
+            <div style="font-weight:500;color:var(--gray-800)">${escapeHtml(item.title)}${buildFutureInlineBadge(itemTargets[index]?.fields?.title || itemTargets[index])}</div>
+            <div style="font-size:11px;color:var(--gray-400);margin-top:2px">${escapeHtml(item.source)}</div>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-sm btn-accent" onclick="this.closest('.list-item').style.opacity='0.4'; this.closest('.list-item').querySelector('.badge-result')?.remove(); this.parentElement.innerHTML='<span class=\\'badge badge-green\\'>Approved</span>'">Approve</button>
+            <button class="btn btn-sm btn-danger-outline" onclick="this.closest('.list-item').style.opacity='0.4'; this.parentElement.innerHTML='<span class=\\'badge badge-red\\'>Rejected</span>'">Reject</button>
+          </div>
+        </div>
+      `;
+    });
+    container.innerHTML = html;
   });
-  container.innerHTML = html;
 }
 
 // ── PROGRESS ───────────────────────────────────────────────────
-function renderProgress(container, w) {
-  let pct, label;
-  if (w.id === 'op-sla-compliance') {
-    pct = state.role === 'agent' ? 91 : 87;
-    label = w.scopeLabel ? w.scopeLabel[state.role] : `${pct}% of tickets within SLA`;
+function buildMockProgressPayload(widget, context) {
+  if (widget.id === 'op-sla-compliance') {
+    const percent = context.role === 'agent' ? 91 : 87;
+    return {
+      percent,
+      label: widget.scopeLabel ? widget.scopeLabel[context.role] : `${percent}% of tickets within SLA`,
+    };
   }
-  else if (w.id === 'au-journeys-success') { pct = 72; label = '72% of journeys completed successfully'; }
-  else { pct = rand(60, 95); label = `${pct}%`; }
+  if (widget.id === 'au-journeys-success') {
+    return { percent: 72, label: '72% of journeys completed successfully' };
+  }
+  const percent = rand(60, 95);
+  return { percent, label: `${percent}%` };
+}
 
-  const color = pct >= 80 ? 'green' : pct >= 60 ? 'orange' : 'red';
-  container.innerHTML = `
-    <div class="kpi-value">${pct}%</div>
-    <div class="kpi-sub">${label}</div>
-    <div class="progress-bar"><div class="progress-fill ${color}" style="width:${pct}%"></div></div>
-  `;
+function renderProgress(container, w) {
+  renderResolvedWidget(container, w, (result) => {
+    const percent = result.payload?.percent || 0;
+    const label = result.payload?.label || '';
+    const color = percent >= 80 ? 'green' : percent >= 60 ? 'orange' : 'red';
+    container.innerHTML = `
+      <div class="kpi-value">${escapeHtml(percent)}%${buildFutureInlineBadge(result.provenance?.targets?.value)}</div>
+      <div class="kpi-sub">${escapeHtml(label)}${buildFutureInlineBadge(result.provenance?.targets?.label)}</div>
+      <div class="progress-bar"><div class="progress-fill ${color}" style="width:${percent}%"></div></div>
+    `;
+  });
 }
 
 // ── OPPORTUNITIES BACKLOG ──────────────────────────────────────
+function buildMockOpportunitiesPayload() {
+  return {
+    items: [
+      { id: 'opp1', source: 'Add knowledge article for API integration', impact: 'high', owner: 'AI Analysis', status: 'new' },
+      { id: 'opp2', source: 'Improve routing for billing intents', impact: 'medium', owner: 'AI Analysis', status: 'new' },
+      { id: 'opp3', source: 'Enable auto-close for resolved shipping queries', impact: 'medium', owner: 'AI Analysis', status: 'approved' },
+      { id: 'opp4', source: 'Merge duplicate FAQ articles on pricing', impact: 'low', owner: 'Content Team', status: 'new' },
+      { id: 'opp5', source: 'Add WhatsApp quick-reply templates', impact: 'high', owner: 'AI Analysis', status: 'new' },
+      { id: 'opp6', source: 'Create escalation playbook for VIP accounts', impact: 'high', owner: 'Support Lead', status: 'new' },
+      { id: 'opp7', source: 'Automate tagging for refund-related tickets', impact: 'medium', owner: 'AI Analysis', status: 'new' },
+      { id: 'opp8', source: 'Add canned responses for top 10 intents', impact: 'medium', owner: 'Content Team', status: 'approved' },
+      { id: 'opp9', source: 'Reduce handoff rate for onboarding flow', impact: 'high', owner: 'AI Analysis', status: 'new' },
+      { id: 'opp10', source: 'Flag tickets with sentiment < 30% for priority review', impact: 'medium', owner: 'AI Analysis', status: 'new' },
+      { id: 'opp11', source: 'Consolidate duplicate intents: "pricing" vs "cost inquiry"', impact: 'low', owner: 'Content Team', status: 'new' },
+      { id: 'opp12', source: 'Train AI agent on new return policy (updated Jan 2026)', impact: 'high', owner: 'AI Analysis', status: 'new' },
+      { id: 'opp13', source: 'Add proactive message for delayed shipment notifications', impact: 'medium', owner: 'Automation Team', status: 'new' },
+      { id: 'opp14', source: 'Review low-confidence AI responses from last 7 days', impact: 'low', owner: 'AI Analysis', status: 'new' },
+      { id: 'opp15', source: 'Set up SLA breach alerts for enterprise tier accounts', impact: 'high', owner: 'Support Lead', status: 'new' },
+    ],
+  };
+}
+
 function renderOpportunities(container, w) {
-  const opps = [
-    { id: 'opp1', source: 'Add knowledge article for API integration', impact: 'high', owner: 'AI Analysis', status: 'new' },
-    { id: 'opp2', source: 'Improve routing for billing intents', impact: 'medium', owner: 'AI Analysis', status: 'new' },
-    { id: 'opp3', source: 'Enable auto-close for resolved shipping queries', impact: 'medium', owner: 'AI Analysis', status: 'approved' },
-    { id: 'opp4', source: 'Merge duplicate FAQ articles on pricing', impact: 'low', owner: 'Content Team', status: 'new' },
-    { id: 'opp5', source: 'Add WhatsApp quick-reply templates', impact: 'high', owner: 'AI Analysis', status: 'new' },
-    { id: 'opp6', source: 'Create escalation playbook for VIP accounts', impact: 'high', owner: 'Support Lead', status: 'new' },
-    { id: 'opp7', source: 'Automate tagging for refund-related tickets', impact: 'medium', owner: 'AI Analysis', status: 'new' },
-    { id: 'opp8', source: 'Add canned responses for top 10 intents', impact: 'medium', owner: 'Content Team', status: 'approved' },
-    { id: 'opp9', source: 'Reduce handoff rate for onboarding flow', impact: 'high', owner: 'AI Analysis', status: 'new' },
-    { id: 'opp10', source: 'Flag tickets with sentiment < 30% for priority review', impact: 'medium', owner: 'AI Analysis', status: 'new' },
-    { id: 'opp11', source: 'Consolidate duplicate intents: "pricing" vs "cost inquiry"', impact: 'low', owner: 'Content Team', status: 'new' },
-    { id: 'opp12', source: 'Train AI agent on new return policy (updated Jan 2026)', impact: 'high', owner: 'AI Analysis', status: 'new' },
-    { id: 'opp13', source: 'Add proactive message for delayed shipment notifications', impact: 'medium', owner: 'Automation Team', status: 'new' },
-    { id: 'opp14', source: 'Review low-confidence AI responses from last 7 days', impact: 'low', owner: 'AI Analysis', status: 'new' },
-    { id: 'opp15', source: 'Set up SLA breach alerts for enterprise tier accounts', impact: 'high', owner: 'Support Lead', status: 'new' },
-  ];
-
-  let html = `<div style="margin-bottom:12px;font-size:12px;color:var(--gray-500);display:flex;gap:24px;">
-    <span><strong>Source</strong></span>
-    <span style="margin-left:auto;display:flex;gap:24px;">
-      <span><strong>Impact</strong></span>
-      <span><strong>Owner</strong></span>
-      <span><strong>Status</strong></span>
-      <span style="width:130px"><strong>Actions</strong></span>
-    </span>
-  </div>`;
-
-  opps.forEach(opp => {
-    const oppState = state.opportunityStates[opp.id];
-    const dismissed = oppState === 'dismissed';
-    const confirmed = oppState === 'confirmed';
-    html += `<div class="opp-item ${dismissed ? 'dismissed' : ''} ${confirmed ? 'confirmed' : ''}" data-opp-id="${opp.id}">
-      <span class="opp-source">${opp.source}</span>
-      <span class="opp-impact ${opp.impact}">${opp.impact}</span>
-      <span class="opp-owner">${opp.owner}</span>
-      <span class="opp-status-badge">${confirmed ? 'Implemented' : opp.status}</span>
-      <span class="opp-actions">
-        ${dismissed || confirmed ? '' : `
-          <button class="btn btn-sm btn-secondary" onclick="dismissOpportunity('${opp.id}')">Dismiss</button>
-          <button class="btn btn-sm btn-primary" onclick="actionOpportunity('${opp.id}', '${opp.source.replace(/'/g, "\\'")}')">Action</button>
-        `}
+  renderResolvedWidget(container, w, (result) => {
+    const items = result.payload?.items || [];
+    const itemTargets = result.provenance?.targets?.items || [];
+    let html = `<div style="margin-bottom:12px;font-size:12px;color:var(--gray-500);display:flex;gap:24px;">
+      <span><strong>Source</strong></span>
+      <span style="margin-left:auto;display:flex;gap:24px;">
+        <span><strong>Impact</strong></span>
+        <span><strong>Owner</strong></span>
+        <span><strong>Status</strong></span>
+        <span style="width:130px"><strong>Actions</strong></span>
       </span>
     </div>`;
-  });
 
-  container.innerHTML = html;
+    items.forEach((opp, index) => {
+      const oppState = state.opportunityStates[opp.id];
+      const dismissed = oppState === 'dismissed';
+      const confirmed = oppState === 'confirmed';
+      const itemTarget = itemTargets[index];
+      html += `<div class="opp-item ${dismissed ? 'dismissed' : ''} ${confirmed ? 'confirmed' : ''} ${shouldHighlightFuturePart(itemTarget) ? 'future-inline-row' : ''}" data-opp-id="${opp.id}">
+        <span class="opp-source">${escapeHtml(opp.source)}${buildFutureInlineBadge(itemTarget?.fields?.source || itemTarget)}</span>
+        <span class="opp-impact ${escapeHtml(opp.impact)}">${escapeHtml(opp.impact)}</span>
+        <span class="opp-owner">${escapeHtml(opp.owner)}</span>
+        <span class="opp-status-badge">${escapeHtml(confirmed ? 'Implemented' : opp.status)}</span>
+        <span class="opp-actions">
+          ${dismissed || confirmed ? '' : `
+            <button class="btn btn-sm btn-secondary" onclick="dismissOpportunity('${opp.id}')">Dismiss</button>
+            <button class="btn btn-sm btn-primary" onclick="actionOpportunity('${opp.id}', '${opp.source.replace(/'/g, "\\'")}')">Action</button>
+          `}
+        </span>
+      </div>`;
+    });
+
+    container.innerHTML = html;
+  });
 }
 
 // Global opportunity handlers
@@ -3679,12 +4401,16 @@ function applyBarFilter(widgetId) {
   if (!chart) return;
   const bf = state.barFilter;
   const totalBars = chart.data.labels.length;
+  if (bf.widgetId !== widgetId || !Array.isArray(bf.baseDatasets) || !bf.baseDatasets.length) {
+    bf.baseDatasets = cloneData(chart.data.datasets || []);
+  }
 
   // Dim non-selected bars across all datasets
-  chart.data.datasets.forEach(dataset => {
-    const base = Array.isArray(dataset.backgroundColor)
-      ? dataset.backgroundColor.slice()
-      : Array(totalBars).fill(dataset.backgroundColor);
+  chart.data.datasets.forEach((dataset, datasetIndex) => {
+    const baseDataset = bf.baseDatasets?.[datasetIndex] || dataset;
+    const base = Array.isArray(baseDataset.backgroundColor)
+      ? baseDataset.backgroundColor.slice()
+      : Array(totalBars).fill(baseDataset.backgroundColor);
     dataset.backgroundColor = base.map((color, i) =>
       bf.selectedIndices.has(i) ? color : hexToRgba(color, 0.2)
     );
@@ -3712,13 +4438,18 @@ function clearBarFilter() {
   const bf = state.barFilter;
   if (!bf.widgetId) return;
 
-  // Restore original bar colours from cached data
+  // Restore original chart styles from the snapshot taken before dimming.
   const chart = state.charts[bf.widgetId];
   if (chart) {
-    const cached = state.mockData.charts[bf.widgetId];
-    if (cached) {
-      cached.datasets.forEach((ds, i) => {
-        if (chart.data.datasets[i]) chart.data.datasets[i].backgroundColor = ds.backgroundColor;
+    const datasets = Array.isArray(bf.baseDatasets) ? bf.baseDatasets : [];
+    if (datasets.length) {
+      datasets.forEach((ds, i) => {
+        if (!chart.data.datasets[i]) return;
+        chart.data.datasets[i].backgroundColor = cloneData(ds.backgroundColor);
+        if (ds.borderColor !== undefined) chart.data.datasets[i].borderColor = cloneData(ds.borderColor);
+        if (ds.borderWidth !== undefined) chart.data.datasets[i].borderWidth = cloneData(ds.borderWidth);
+        if (ds.pointRadius !== undefined) chart.data.datasets[i].pointRadius = cloneData(ds.pointRadius);
+        if (ds.pointHoverRadius !== undefined) chart.data.datasets[i].pointHoverRadius = cloneData(ds.pointHoverRadius);
       });
     }
     chart.update('none');
@@ -3734,6 +4465,7 @@ function clearBarFilter() {
   bf.widgetId = null;
   bf.sectionId = null;
   bf.selectedIndices.clear();
+  bf.baseDatasets = null;
 }
 
 function showKPIFilteredBadge(sectionId) {
@@ -5083,6 +5815,7 @@ function validateTeamSettingsDraft(draft) {
 function applySavedTeams(teams, renameMap = {}) {
   const previousFilter = state.teamFilter;
   syncTeamsState(teams, { persist: 'user' });
+  clearWidgetDataCaches();
 
   if (previousFilter && previousFilter !== 'All teams') {
     state.teamFilter = renameMap[previousFilter] || previousFilter;
@@ -5100,6 +5833,7 @@ function applyTeamSettingsDefault(teams) {
   writeStoredTeams(DEFAULT_TEAMS_KEY, teams);
   if (!hadUserOverride) {
     syncTeamsState(teams);
+    clearWidgetDataCaches();
     updateTeamFilterOptions();
     syncLensButtons();
     resetViewState();
@@ -5221,7 +5955,8 @@ window._prototypeGuideAPI = {
           { value: 'agent', label: 'Agent' }
         ]
       },
-      anchorsNavUser: localStorage.getItem(ANCHORS_NAV_USER_KEY) === 'true'
+      anchorsNavUser: localStorage.getItem(ANCHORS_NAV_USER_KEY) === 'true',
+      futureDataHighlights: Boolean(state.dataUI.futureHighlightsEnabled),
     };
   },
   getAdminData: function () {
@@ -5285,6 +6020,11 @@ window._prototypeGuideAPI = {
     // Generic toggle handler — routes to specific implementations
     if (key === 'anchorsNavUser') {
       this.setAnchorsNavUser(checked);
+      return;
+    }
+    if (key === 'futureDataHighlights') {
+      setFutureDataHighlightsEnabled(checked);
+      [...state.loadedSections].forEach((sectionId) => remountSection(sectionId));
     }
   },
   setSlider: function (key, value) {
@@ -5321,4 +6061,3 @@ window.performResetSubnav = performResetSubnav;
 if (typeof AdminAssistant !== 'undefined') {
   AdminAssistant.init();
 }
-

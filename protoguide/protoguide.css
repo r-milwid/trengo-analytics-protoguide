@@ -782,6 +782,11 @@ body[data-panel="bar"] .ai-panel-inner {
   background: rgba(255,255,255,0.72);
   color: var(--panel-text);
 }
+.ai-panel-btn.ai-panel-btn-active {
+  background: rgba(145, 157, 111, 0.16);
+  color: #40502f;
+  border-color: rgba(145, 157, 111, 0.42);
+}
 
 /* ── Messages area ─────────────────────────────────────────── */
 .ai-panel-messages {

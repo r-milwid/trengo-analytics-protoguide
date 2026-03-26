@@ -22,6 +22,7 @@ synthetic-data/
   base-analytics.js     Mock data generator for KPIs, charts, tables
 mock-customers/         6 test customer profiles (JSON) + index
 tests/
+  dashboard-data-tests.mjs Focused widget-data and ProtoGuide toggle contract suite
   protoguide-tests.mjs  ProtoGuide panel test suite
 protoguide/
   protoguide-login.html Login page (Google Identity Services auth)
@@ -46,6 +47,9 @@ chatbot-proxy/
 3. UI changes → `DashboardConfig.notifyChanged()` → debounced save to KV (1500ms)
 4. Conflict (409) → server config reapplied, UI re-renders
 5. Widget render → section mounts → `renderWidget()` per visible widget
+6. Data widgets resolve through `resolveWidgetData(widgetId, context)` using a normalized dashboard query context
+7. Mock provider remains first-class; API provider is stubbed so later endpoint work fills mappings rather than rewriting renderers
+8. Widget payloads are cached in `state.dataCache` and in-flight requests in `state.dataRequests`
 
 ## Worker API Routes (chatbot-proxy/worker.js)
 - `/config/{userId}` — GET/PUT dashboard config (KV persistence)
@@ -64,11 +68,13 @@ chatbot-proxy/
 ## ProtoGuide Integration
 - ProtoGuide companion panel calls `_prototypeGuideAPI` directly (no postMessage bridge)
 - AI context is embedded in protoguide.js (not loaded from a separate file)
-- `_prototypeGuideAPI` exposes settings/admin control surface (setRole, setFlag, triggerAction)
+- `_prototypeGuideAPI` exposes settings/admin control surface (setRole, setFlag, setToggle, triggerAction)
+- ProtoGuide settings row now includes a future-data highlight toggle backed by localStorage and `_prototypeGuideAPI.getSettingsData().futureDataHighlights`
 - When standalone (no ProtoGuide), API functions are harmless no-ops
 
 ## Widget System
 - Each widget: `id`, `title`, `type` (kpi/bar-chart/table/list/etc), `vis` (always/default/hidden)
+- Data widgets also carry `dataSpec` (kind, query context inputs, API mapping, export shape) and `futureSpec` (`v1`/`mixed`/`future`)
 - Visibility layers (in order): base vis → role+lens state overrides → team usecases (feature flag) → channel filters → individual hide/add state
 - `getEffectiveVisibility(w)` resolves all layers
 - Widgets keyed by section: overview, understand, operate, improve, automate
@@ -90,8 +96,11 @@ chatbot-proxy/
 
 ## Key Patterns
 - Global event delegation for nav, filters, drawers
-- Mock data generated client-side (rand, randF, pickTrend, paletteCycle)
+- Data widgets render from normalized resolver results instead of calling mock helpers directly from render functions
+- Mock data is still generated client-side (rand, randF, pickTrend, paletteCycle) but now inside provider-style payload builders
+- Per-field fallback merge is the default: API values win where present, mock fills missing fields/rows/series/points
 - Chart.js instances tracked in `state.charts[widgetId]`, destroyed on unmount
+- Future-looking widgets can surface widget-level badges and inline highlight tags when the ProtoGuide toggle is enabled
 - Onboarding overlay: independent step-through, completion persisted in localStorage
 - AI onboarding assistant: Sonnet-powered setup flow via admin-assistant.js
 - Assistant session memory: localStorage-based via assistant-storage.js (structured facts, team assignments, goals, proposals)

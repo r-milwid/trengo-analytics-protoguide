@@ -443,7 +443,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
   const chatInput = document.getElementById('chat-input');
   const chatSend = document.getElementById('chat-send');
   const insightsBtn = document.getElementById('open-insights-btn');
-
+  const futureDataBtn = document.getElementById('toggle-future-data-btn');
   const settingsBtn = document.getElementById('open-settings-btn');
   const feedbackBtn = document.getElementById('open-feedback-btn');
   const bugBtn = document.getElementById('open-bug-btn');
@@ -1387,6 +1387,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     userMenuReset.addEventListener('click', () => {
       if (userMenuPopover) userMenuPopover.style.display = 'none';
       if (window.performResetAll) window.performResetAll();
+      syncFutureDataButton(false);
       // Clear chat
       messages.length = 0;
       pendingFeedback = null;
@@ -1400,6 +1401,8 @@ All data in the prototype is randomly generated on each page load. KPI values, c
 
   function updateSettingsRow() {
     var settingsRowEl = document.getElementById('ai-panel-settings-row');
+    var api = window._prototypeGuideAPI;
+    var settingsData = api ? api.getSettingsData() : {};
 
     // Viewer: hide entire settings row (same as original SideCar guest role)
     if (!currentUser || !hasMinRole(currentUser.role, 'admin')) {
@@ -1413,10 +1416,18 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     // Admin: show insights + settings icons
     if (settingsRowEl) settingsRowEl.style.display = '';
     if (insightsBtn) insightsBtn.style.display = '';
+    if (futureDataBtn) futureDataBtn.style.display = '';
     if (settingsBtn) settingsBtn.style.display = '';
+    syncFutureDataButton(Boolean(settingsData.futureDataHighlights));
     if (chatInputActions) chatInputActions.style.display = '';
     if (userMenuBtn) userMenuBtn.style.display = 'none'; // user menu in settings overlay instead
     syncChatInputState(true);
+  }
+
+  function syncFutureDataButton(enabled) {
+    if (!futureDataBtn) return;
+    futureDataBtn.classList.toggle('ai-panel-btn-active', Boolean(enabled));
+    futureDataBtn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
   }
 
   function syncChatInputState(enabled) {
@@ -1526,6 +1537,16 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       }
       openGuideOverlay(settingsOverlay);
       renderSettingsOverlay();
+    });
+  }
+
+  if (futureDataBtn) {
+    futureDataBtn.addEventListener('click', () => {
+      const api = window._prototypeGuideAPI;
+      const settingsData = api ? api.getSettingsData() : {};
+      const next = !settingsData.futureDataHighlights;
+      syncFutureDataButton(next);
+      postToPrototype({ type: 'guide:set-toggle', key: 'futureDataHighlights', checked: next });
     });
   }
 
@@ -2360,6 +2381,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     if (resetAllBtn) resetAllBtn.addEventListener('click', function() {
       if (confirm('Reset all prototype state? This cannot be undone.')) {
         if (window.performResetAll) window.performResetAll();
+        syncFutureDataButton(false);
       }
     });
 

@@ -473,6 +473,193 @@ const WIDGETS = {
 
 };
 
+const DATA_WIDGET_TYPES = new Set([
+  'kpi',
+  'kpi-group',
+  'bar-chart',
+  'line-chart',
+  'doughnut-chart',
+  'funnel',
+  'table',
+  'list',
+  'agent-status',
+  'list-actions',
+  'progress',
+  'opportunities',
+]);
+
+const DEFAULT_WIDGET_QUERY_CONTEXT = ['customer', 'role', 'personaRole', 'lens', 'dateRange', 'team', 'channels'];
+
+function createApiMapping(entity, metrics, extra = {}) {
+  return {
+    entity,
+    metrics: Array.isArray(metrics) ? metrics.slice() : [metrics],
+    ...extra,
+  };
+}
+
+function createDataSpec(kind, options = {}) {
+  return {
+    kind,
+    queryContext: (options.queryContext || DEFAULT_WIDGET_QUERY_CONTEXT).slice(),
+    sourcePriority: (options.sourcePriority || ['api', 'mock']).slice(),
+    exportShape: options.exportShape || kind,
+    formatting: options.formatting || null,
+    interactionHints: {
+      supportsCsv: ['bar-chart', 'line-chart', 'doughnut-chart', 'table'].includes(kind),
+      supportsNumbersView: ['bar-chart', 'line-chart', 'doughnut-chart'].includes(kind),
+      supportsBarFilter: kind === 'bar-chart',
+      ...options.interactionHints,
+    },
+    apiMapping: options.apiMapping || { widgetId: options.widgetId || null },
+    mockResolverId: options.mockResolverId || options.widgetId || null,
+  };
+}
+
+function defaultInlineTargetsForType(type) {
+  switch (type) {
+    case 'kpi': return ['primary', 'trend', 'extras'];
+    case 'kpi-group': return ['groups'];
+    case 'bar-chart':
+    case 'line-chart':
+    case 'doughnut-chart': return ['datasets', 'points', 'legend'];
+    case 'funnel': return ['stages'];
+    case 'table': return ['rows', 'cells'];
+    case 'list':
+    case 'list-actions': return ['items'];
+    case 'agent-status': return ['items', 'badges'];
+    case 'progress': return ['value', 'label'];
+    case 'opportunities': return ['items', 'status'];
+    default: return [];
+  }
+}
+
+const WIDGET_DATA_SPECS = {
+  'ov-open-tickets': createDataSpec('kpi', { widgetId: 'ov-open-tickets', formatting: 'count', apiMapping: createApiMapping('team_daily', 'open_tickets') }),
+  'ov-assigned-tickets': createDataSpec('kpi', { widgetId: 'ov-assigned-tickets', formatting: 'count', apiMapping: createApiMapping('team_daily', 'assigned_tickets') }),
+  'ov-first-response': createDataSpec('kpi', { widgetId: 'ov-first-response', formatting: 'duration_minutes', apiMapping: createApiMapping('team_daily', 'first_response_minutes') }),
+  'ov-escalation-rate': createDataSpec('kpi', { widgetId: 'ov-escalation-rate', formatting: 'rate', apiMapping: createApiMapping('team_daily', ['escalation_rate', 'handoff_rate']) }),
+  'ov-resolution-time': createDataSpec('kpi', { widgetId: 'ov-resolution-time', formatting: 'duration_hours', apiMapping: createApiMapping('team_daily', 'resolution_hours') }),
+  'ov-pipeline-value': createDataSpec('kpi', { widgetId: 'ov-pipeline-value', formatting: 'currency', apiMapping: createApiMapping('team_daily', 'pipeline_value') }),
+  'ov-win-rate': createDataSpec('kpi', { widgetId: 'ov-win-rate', formatting: 'rate', apiMapping: createApiMapping('team_daily', 'win_rate') }),
+  'ov-avg-deal-size': createDataSpec('kpi', { widgetId: 'ov-avg-deal-size', formatting: 'currency', apiMapping: createApiMapping('team_daily', 'avg_deal_size') }),
+  'ov-avg-sales-cycle': createDataSpec('kpi', { widgetId: 'ov-avg-sales-cycle', formatting: 'duration_days', apiMapping: createApiMapping('team_daily', 'sales_cycle_days') }),
+  'ov-tickets-by-hour': createDataSpec('bar-chart', { widgetId: 'ov-tickets-by-hour', formatting: 'count', apiMapping: createApiMapping('hourly_daily', 'hourly_ticket_count', { dimension: 'hour', comparison: 'period_average' }) }),
+  'ov-vc-missed-calls': createDataSpec('kpi', { widgetId: 'ov-vc-missed-calls', formatting: 'count', apiMapping: createApiMapping('team_daily', 'missed_calls') }),
+  'ov-vc-total-calls': createDataSpec('kpi', { widgetId: 'ov-vc-total-calls', formatting: 'count', apiMapping: createApiMapping('team_daily', 'total_calls') }),
+  'ov-intent-trends': createDataSpec('list', { widgetId: 'ov-intent-trends', formatting: 'count', exportShape: 'list', apiMapping: createApiMapping('intent_daily', 'intent_volume', { dimension: 'intent' }) }),
+  'ov-knowledge-gaps': createDataSpec('kpi', { widgetId: 'ov-knowledge-gaps', formatting: 'count', apiMapping: createApiMapping('team_daily', 'knowledge_gap_count') }),
+  'ov-exceptions': createDataSpec('list', { widgetId: 'ov-exceptions', exportShape: 'list', apiMapping: createApiMapping('team_daily', ['near_breach_tickets', 'low_confidence_ai_tickets', 'queue_overflow_tickets']) }),
+  'ov-vc-calls-by-hour': createDataSpec('bar-chart', { widgetId: 'ov-vc-calls-by-hour', formatting: 'count', apiMapping: createApiMapping('hourly_daily', 'hourly_call_count', { dimension: 'hour', comparison: 'period_average' }) }),
+
+  'un-tickets-created': createDataSpec('line-chart', { widgetId: 'un-tickets-created', formatting: 'count', apiMapping: createApiMapping('team_daily', 'tickets_created', { grain: 'date' }) }),
+  'un-leads-created': createDataSpec('bar-chart', { widgetId: 'un-leads-created', formatting: 'count', apiMapping: createApiMapping('team_daily', 'leads_created', { grain: 'date', dimension: 'channel' }) }),
+  'un-deals-created': createDataSpec('bar-chart', { widgetId: 'un-deals-created', formatting: 'count', apiMapping: createApiMapping('team_daily', 'deals_created', { grain: 'date', dimension: 'channel' }) }),
+  'un-sales-funnel': createDataSpec('funnel', { widgetId: 'un-sales-funnel', formatting: 'count', exportShape: 'funnel', apiMapping: createApiMapping('stage_daily', 'stage_count', { dimension: 'stage' }) }),
+  'un-deals-won-by-channel': createDataSpec('doughnut-chart', { widgetId: 'un-deals-won-by-channel', formatting: 'count', apiMapping: createApiMapping('lead_source_daily', ['lead_source_count', 'won_revenue'], { dimension: 'source' }) }),
+  'un-deals-by-channel': createDataSpec('doughnut-chart', { widgetId: 'un-deals-by-channel', formatting: 'count', apiMapping: createApiMapping('lead_source_daily', 'lead_source_count', { dimension: 'source' }) }),
+  'un-entry-channels': createDataSpec('bar-chart', { widgetId: 'un-entry-channels', formatting: 'count', apiMapping: createApiMapping('team_daily', ['tickets_created', 'new_contacts'], { dimension: 'channel' }) }),
+  'un-vc-inbound-outbound': createDataSpec('bar-chart', { widgetId: 'un-vc-inbound-outbound', formatting: 'count', apiMapping: createApiMapping('voice_direction_daily', 'direction_calls', { dimension: 'direction', grain: 'date' }) }),
+  'un-vc-duration-inbound-outbound': createDataSpec('bar-chart', { widgetId: 'un-vc-duration-inbound-outbound', formatting: 'duration_minutes', apiMapping: createApiMapping('call_quality_daily', ['avg_hold_minutes', 'hold_minutes'], { dimension: 'connection_result', grain: 'date' }) }),
+  'un-new-returning': createDataSpec('doughnut-chart', { widgetId: 'un-new-returning', formatting: 'count', apiMapping: createApiMapping('contact_type_daily', 'contact_count', { dimension: 'contact_type' }) }),
+  'un-intent-clusters': createDataSpec('bar-chart', { widgetId: 'un-intent-clusters', formatting: 'count', apiMapping: createApiMapping('intent_daily', 'intent_volume', { dimension: 'intent' }) }),
+  'un-intent-trends': createDataSpec('line-chart', { widgetId: 'un-intent-trends', formatting: 'count', apiMapping: createApiMapping('intent_daily', 'intent_volume', { dimension: 'intent', grain: 'date' }) }),
+  'un-emerging-intents': createDataSpec('list', { widgetId: 'un-emerging-intents', exportShape: 'list', apiMapping: createApiMapping('intent_daily', 'intent_volume', { dimension: 'intent' }) }),
+  'un-unknown-intents': createDataSpec('kpi', { widgetId: 'un-unknown-intents', formatting: 'count', apiMapping: createApiMapping('team_daily', 'unknown_intents') }),
+  'un-escalations-intent': createDataSpec('bar-chart', { widgetId: 'un-escalations-intent', formatting: 'count', apiMapping: createApiMapping('intent_daily', 'intent_escalations', { dimension: 'intent' }) }),
+  'un-vc-channel-performance': createDataSpec('table', { widgetId: 'un-vc-channel-performance', exportShape: 'table', apiMapping: createApiMapping('voice_channel_daily', ['voice_channel_calls', 'voice_channel_wait'], { dimension: 'channel' }) }),
+
+  'op-first-response': createDataSpec('kpi', { widgetId: 'op-first-response', formatting: 'duration_minutes', apiMapping: createApiMapping('team_daily', 'first_response_minutes') }),
+  'op-vc-time-to-answer': createDataSpec('kpi', { widgetId: 'op-vc-time-to-answer', formatting: 'duration_minutes', apiMapping: createApiMapping('team_daily', 'avg_wait_minutes') }),
+  'op-vc-call-duration-kpis': createDataSpec('kpi-group', { widgetId: 'op-vc-call-duration-kpis', formatting: 'duration_minutes', apiMapping: createApiMapping('team_daily', ['avg_call_duration_minutes', 'longest_wait_minutes']) }),
+  'op-resolution-time': createDataSpec('kpi', { widgetId: 'op-resolution-time', formatting: 'duration_hours', apiMapping: createApiMapping('team_daily', 'resolution_hours') }),
+  'op-created-closed': createDataSpec('line-chart', { widgetId: 'op-created-closed', formatting: 'count', apiMapping: createApiMapping('team_daily', ['tickets_created', 'tickets_resolved'], { grain: 'date' }) }),
+  'op-reopened': createDataSpec('kpi', { widgetId: 'op-reopened', formatting: 'count', apiMapping: createApiMapping('team_daily', 'reopened_tickets') }),
+  'op-workload-agent': createDataSpec('table', { widgetId: 'op-workload-agent', exportShape: 'table', apiMapping: createApiMapping('agent_daily', ['conversations_handled', 'agent_open_tickets', 'agent_csat'], { dimension: 'agent' }) }),
+  'op-sales-performance': createDataSpec('table', { widgetId: 'op-sales-performance', exportShape: 'table', apiMapping: createApiMapping('agent_daily', ['leads_created', 'deals_created', 'pipeline_value', 'won_revenue', 'win_rate'], { dimension: 'agent' }) }),
+  'op-channel-stage-matrix': createDataSpec('table', { widgetId: 'op-channel-stage-matrix', exportShape: 'table', apiMapping: createApiMapping('stage_daily', ['stage_count', 'stage_value'], { dimension: 'stage' }) }),
+  'op-vc-calls-by-team': createDataSpec('bar-chart', { widgetId: 'op-vc-calls-by-team', formatting: 'count', apiMapping: createApiMapping('team_daily', ['inbound_calls', 'outbound_calls'], { dimension: 'team' }) }),
+  'op-vc-avg-wait-by-team': createDataSpec('bar-chart', { widgetId: 'op-vc-avg-wait-by-team', formatting: 'duration_minutes', apiMapping: createApiMapping('team_daily', 'avg_wait_minutes', { dimension: 'team' }) }),
+  'op-vc-longest-wait': createDataSpec('kpi', { widgetId: 'op-vc-longest-wait', formatting: 'duration_minutes', apiMapping: createApiMapping('team_daily', 'longest_wait_minutes') }),
+  'op-vc-duration-by-team': createDataSpec('bar-chart', { widgetId: 'op-vc-duration-by-team', formatting: 'duration_minutes', apiMapping: createApiMapping('team_daily', 'avg_call_duration_minutes', { dimension: 'team' }) }),
+  'op-sla-compliance': createDataSpec('progress', { widgetId: 'op-sla-compliance', formatting: 'rate', exportShape: 'metric', apiMapping: createApiMapping('team_daily', 'sla_breach_rate') }),
+  'op-bottlenecks': createDataSpec('bar-chart', { widgetId: 'op-bottlenecks', formatting: 'count', apiMapping: createApiMapping('workflow_status_daily', 'status_count', { dimension: 'status' }) }),
+  'op-channel-perf': createDataSpec('table', { widgetId: 'op-channel-perf', exportShape: 'table', apiMapping: createApiMapping('team_daily', ['resolution_hours', 'first_response_minutes', 'sla_breach_rate', 'tickets_resolved', 'open_tickets'], { dimension: 'channel' }) }),
+  'op-capacity-demand': createDataSpec('line-chart', { widgetId: 'op-capacity-demand', formatting: 'duration_hours', apiMapping: createApiMapping('team_daily', ['capacity_hours', 'demand_hours'], { grain: 'date' }) }),
+  'op-vc-abandonment-trend': createDataSpec('line-chart', { widgetId: 'op-vc-abandonment-trend', formatting: 'rate', apiMapping: createApiMapping('team_daily', ['abandonment_rate', 'total_calls'], { grain: 'date' }) }),
+  'op-vc-callbacks-requested': createDataSpec('kpi', { widgetId: 'op-vc-callbacks-requested', formatting: 'count', apiMapping: createApiMapping('team_daily', 'callback_requests') }),
+  'op-vc-agent-online-status': createDataSpec('agent-status', { widgetId: 'op-vc-agent-online-status', exportShape: 'list', apiMapping: createApiMapping('agent_presence_daily', ['online_hours', 'busy_hours', 'away_hours', 'offline_hours'], { dimension: 'agent' }) }),
+
+  'im-csat': createDataSpec('kpi', { widgetId: 'im-csat', formatting: 'score', apiMapping: createApiMapping('team_daily', 'csat') }),
+  'im-response-rate': createDataSpec('kpi', { widgetId: 'im-response-rate', formatting: 'rate', apiMapping: createApiMapping('team_daily', 'survey_response_rate') }),
+  'im-vc-fcr-rate': createDataSpec('kpi', { widgetId: 'im-vc-fcr-rate', formatting: 'rate', apiMapping: createApiMapping('team_daily', 'first_call_resolution_rate') }),
+  'im-vc-call-ticket-rate': createDataSpec('kpi', { widgetId: 'im-vc-call-ticket-rate', formatting: 'rate', apiMapping: createApiMapping('team_daily', 'call_to_ticket_rate') }),
+  'im-responses': createDataSpec('kpi-group', { widgetId: 'im-responses', formatting: 'count', apiMapping: createApiMapping('team_daily', ['promoter_responses', 'detractor_responses', 'survey_responses']) }),
+  'im-satisfaction-score': createDataSpec('line-chart', { widgetId: 'im-satisfaction-score', formatting: 'score', apiMapping: createApiMapping('team_daily', ['csat', 'survey_responses'], { grain: 'date' }) }),
+  'im-surveys': createDataSpec('bar-chart', { widgetId: 'im-surveys', formatting: 'count', apiMapping: createApiMapping('team_daily', 'survey_responses', { grain: 'date' }) }),
+  'im-reopen-rate': createDataSpec('kpi', { widgetId: 'im-reopen-rate', formatting: 'rate', apiMapping: createApiMapping('team_daily', 'reopen_rate') }),
+  'im-knowledge-gaps': createDataSpec('bar-chart', { widgetId: 'im-knowledge-gaps', formatting: 'count', apiMapping: createApiMapping('intent_daily', 'intent_knowledge_gaps', { dimension: 'intent' }) }),
+  'im-suggested-knowledge': createDataSpec('list-actions', { widgetId: 'im-suggested-knowledge', exportShape: 'list', apiMapping: createApiMapping('knowledge_article_daily', ['article_fallback_tickets', 'article_views', 'ai_article_citations']) }),
+  'im-opportunities': createDataSpec('opportunities', { widgetId: 'im-opportunities', exportShape: 'list', apiMapping: createApiMapping('team_daily', ['opportunity_count', 'knowledge_gap_count', 'handoff_rate']) }),
+
+  'au-ai-tickets': createDataSpec('kpi', { widgetId: 'au-ai-tickets', formatting: 'count', apiMapping: createApiMapping('team_daily', 'ai_tickets') }),
+  'au-resolution-rate': createDataSpec('kpi', { widgetId: 'au-resolution-rate', formatting: 'rate', apiMapping: createApiMapping('team_daily', 'ai_resolution_rate') }),
+  'au-assistance-rate': createDataSpec('kpi', { widgetId: 'au-assistance-rate', formatting: 'rate', apiMapping: createApiMapping('team_daily', 'ai_assist_rate') }),
+  'au-open-ticket-rate': createDataSpec('kpi', { widgetId: 'au-open-ticket-rate', formatting: 'rate', apiMapping: createApiMapping('team_daily', 'ai_open_ticket_rate') }),
+  'au-vc-ivr-queue-time': createDataSpec('kpi', { widgetId: 'au-vc-ivr-queue-time', formatting: 'duration_minutes', apiMapping: createApiMapping('team_daily', 'ivr_queue_minutes') }),
+  'au-journeys-success': createDataSpec('progress', { widgetId: 'au-journeys-success', formatting: 'rate', exportShape: 'metric', apiMapping: createApiMapping('team_daily', 'automation_success_rate') }),
+  'au-journeys-escalations': createDataSpec('kpi', { widgetId: 'au-journeys-escalations', formatting: 'count', apiMapping: createApiMapping('team_daily', 'journeys_escalations') }),
+  'au-handoff-reasons': createDataSpec('bar-chart', { widgetId: 'au-handoff-reasons', formatting: 'count', apiMapping: createApiMapping('handoff_reason_daily', 'handoff_reason_count', { dimension: 'reason' }) }),
+  'au-conflicts': createDataSpec('list', { widgetId: 'au-conflicts', exportShape: 'list', apiMapping: createApiMapping('team_daily', 'automation_conflicts') }),
+  'au-safety': createDataSpec('list', { widgetId: 'au-safety', exportShape: 'list', apiMapping: createApiMapping('team_daily', 'guardrail_violations') }),
+};
+
+const WIDGET_FUTURE_SPECS = {
+  'ov-exceptions': { stage: 'future' },
+  'un-emerging-intents': { stage: 'future' },
+  'op-capacity-demand': { stage: 'future' },
+  'im-suggested-knowledge': { stage: 'future' },
+  'im-opportunities': { stage: 'future' },
+  'au-conflicts': { stage: 'future' },
+  'au-safety': { stage: 'future' },
+  'ov-escalation-rate': { stage: 'mixed' },
+  'ov-knowledge-gaps': { stage: 'mixed' },
+  'un-unknown-intents': { stage: 'mixed' },
+  'im-knowledge-gaps': { stage: 'mixed' },
+  'au-journeys-success': { stage: 'mixed' },
+  'au-journeys-escalations': { stage: 'mixed' },
+  'au-handoff-reasons': { stage: 'mixed' },
+  'op-vc-agent-online-status': { stage: 'mixed' },
+};
+
+function buildWidgetDataSpec(widget) {
+  if (!DATA_WIDGET_TYPES.has(widget.type)) return null;
+  const explicit = WIDGET_DATA_SPECS[widget.id];
+  if (explicit) return explicit;
+  return createDataSpec(widget.type, { widgetId: widget.id });
+}
+
+function buildWidgetFutureSpec(widget) {
+  if (!DATA_WIDGET_TYPES.has(widget.type)) return null;
+  const explicit = WIDGET_FUTURE_SPECS[widget.id] || {};
+  return {
+    stage: explicit.stage || 'v1',
+    inlineTargets: (explicit.inlineTargets || defaultInlineTargetsForType(widget.type)).slice(),
+  };
+}
+
+Object.keys(WIDGETS).forEach((categoryId) => {
+  WIDGETS[categoryId] = WIDGETS[categoryId].map((widget) => {
+    const dataSpec = buildWidgetDataSpec(widget);
+    const futureSpec = buildWidgetFutureSpec(widget);
+    return {
+      ...widget,
+      ...(dataSpec ? { dataSpec } : {}),
+      ...(futureSpec ? { futureSpec } : {}),
+    };
+  });
+});
+
 // Flat lookup: widget ID → widget definition (with _sourceCategory attached)
 const WIDGET_BY_ID = {};
 Object.keys(WIDGETS).forEach(cat => {

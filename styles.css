@@ -918,6 +918,86 @@ body {
   background: var(--gray-100);
   color: var(--gray-600);
 }
+.widget-data-state {
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  color: var(--gray-500);
+}
+.widget-data-state-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--gray-700);
+}
+.widget-data-state-detail {
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 280px;
+}
+.widget-card-future {
+  border-color: rgba(192, 151, 55, 0.35);
+}
+.widget-card-future.widget-card-future-mixed {
+  box-shadow: inset 0 0 0 1px rgba(192, 151, 55, 0.08);
+}
+.widget-card-future.widget-card-future-full {
+  box-shadow: inset 0 0 0 1px rgba(192, 151, 55, 0.14);
+}
+.widget-future-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(250, 204, 21, 0.14);
+  color: #8a5a08;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.future-inline-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(250, 204, 21, 0.14);
+  color: #8a5a08;
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.future-inline-row {
+  background: rgba(250, 204, 21, 0.06);
+  border-radius: 8px;
+}
+.kpi-group-grid {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.kpi-group-item {
+  min-width: 120px;
+}
+.kpi-group-label {
+  font-size: 12px;
+  color: var(--gray-500);
+}
+.kpi-group-value {
+  font-size: 22px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+.kpi-group-value--accent { color: var(--accent-dark); }
+.kpi-group-value--info { color: #82c9ff; }
+.kpi-group-value--warning { color: var(--yellow); }
+.kpi-group-value--danger { color: var(--red); }
+.kpi-group-value--muted { color: var(--gray-400); }
 
 /* KPI display */
 .kpi-value {
@@ -969,6 +1049,14 @@ body {
 .chart-container canvas {
   width: 100% !important;
   height: 100% !important;
+}
+.chart-future-note {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #8a5a08;
+  background: rgba(250, 204, 21, 0.1);
+  border-radius: 8px;
+  padding: 6px 8px;
 }
 
 /* Drill link */
@@ -1071,6 +1159,12 @@ body {
 }
 .widget-table tr:last-child td { border-bottom: none; }
 .widget-table tr:hover td { background: var(--gray-50); }
+.widget-table-row-future td {
+  background: rgba(250, 204, 21, 0.06);
+}
+.widget-table-cell-future {
+  position: relative;
+}
 .agent-cell {
   display: flex;
   align-items: center;

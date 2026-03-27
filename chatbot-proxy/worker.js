@@ -1,5 +1,5 @@
 import { handleAnalyticsQuery } from './analytics-query.js';
-import { organizeFeedback, rebuildTrackSummary, typeToTrack } from './feedback-organizer.js';
+import { analyzeCorrectionInsight, organizeFeedback, rebuildTrackSummary, typeToTrack } from './feedback-organizer.js';
 
 const SEED_EMAIL = 'rmilwid@gmail.com';
 
@@ -26,9 +26,29 @@ function mapSubmissionRow(row) {
     submitterName: row.submitter_name,
     createdAt: row.submitted_at,
     organizeStatus: row.organize_status,
+    rawEventJson: parseJsonColumn(row.raw_event_json),
+    insightJson: parseJsonColumn(row.insight_json),
     deleted: !!row.deleted,
     deletedAt: row.deleted_at,
   };
+}
+
+function parseJsonColumn(value) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+}
+
+function stringifyJsonColumn(value) {
+  return value == null ? null : JSON.stringify(value);
+}
+
+async function readJsonBody(request) {
+  const text = await request.text();
+  return text ? JSON.parse(text) : {};
 }
 
 // ── Valid widget IDs (synced from widget-catalog.js) ─────────
@@ -638,22 +658,89 @@ export default {
     // ── POST /protoguide/feedback — store feedback entry (D1) ──────
     if (path === '/protoguide/feedback' && request.method === 'POST') {
       try {
-        const body = await request.json();
+        const body = await readJsonBody(request);
         const id = 'fb_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
         const text = body.text || '';
         const section = body.section || 'General';
         const type = body.type || 'product';
         const submitterName = body.submitterName || body.submitter_name || null;
+        const rawEventJson = body.rawEvent || body.raw_event_json || null;
+        const deferUntilQualified = Boolean(body.deferUntilQualified);
+
+        if (type === 'correction' && rawEventJson && deferUntilQualified) {
+          const insight = await analyzeCorrectionInsight(env, rawEventJson, { candidate: true });
+          if (!insight.shouldStore) {
+            return json({ ok: true, skipped: true });
+          }
+
+          const insightPayload = {
+            issue: insight.issue,
+            context: insight.context,
+            possibleCorrection: insight.possibleCorrection,
+          };
+          const storedText = text || insight.issue.summary || 'AI issue logged';
+
+          await env.FEEDBACK_DB.prepare(
+            'INSERT INTO feedback_submissions (id, submitter_name, raw_text, section, type, raw_event_json, insight_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).bind(
+            id,
+            submitterName,
+            storedText,
+            section,
+            type,
+            stringifyJsonColumn(rawEventJson),
+            stringifyJsonColumn(insightPayload)
+          ).run();
+
+          const track = typeToTrack(type);
+          ctx.waitUntil(
+            organizeFeedback(env.FEEDBACK_DB, env, track, {
+              id,
+              rawText: storedText,
+              section,
+              type,
+              rawEventJson,
+              insightJson: insightPayload,
+            }).catch(e => console.error('Organizer error:', e.message))
+          );
+
+          return json({ ok: true, id });
+        }
 
         await env.FEEDBACK_DB.prepare(
-          'INSERT INTO feedback_submissions (id, submitter_name, raw_text, section, type) VALUES (?, ?, ?, ?, ?)'
-        ).bind(id, submitterName, text, section, type).run();
+          'INSERT INTO feedback_submissions (id, submitter_name, raw_text, section, type, raw_event_json) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(id, submitterName, text, section, type, stringifyJsonColumn(rawEventJson)).run();
 
         // Fire-and-forget organizer
         const track = typeToTrack(type);
         ctx.waitUntil(
-          organizeFeedback(env.FEEDBACK_DB, env, track, { id, rawText: text, section, type })
-            .catch(e => console.error('Organizer error:', e.message))
+          (async () => {
+            let insightPayload = null;
+            if (type === 'correction' && rawEventJson) {
+              try {
+                const insight = await analyzeCorrectionInsight(env, rawEventJson);
+                insightPayload = {
+                  issue: insight.issue,
+                  context: insight.context,
+                  possibleCorrection: insight.possibleCorrection,
+                };
+                await env.FEEDBACK_DB.prepare(
+                  'UPDATE feedback_submissions SET insight_json = ? WHERE id = ?'
+                ).bind(stringifyJsonColumn(insightPayload), id).run();
+              } catch (e) {
+                console.error('Correction analyzer error:', e.message);
+              }
+            }
+
+            await organizeFeedback(env.FEEDBACK_DB, env, track, {
+              id,
+              rawText: text,
+              section,
+              type,
+              rawEventJson,
+              insightJson: insightPayload,
+            });
+          })().catch(e => console.error('Organizer error:', e.message))
         );
 
         return json({ ok: true, id });
@@ -673,6 +760,14 @@ export default {
         if (body.section !== undefined) { sets.push('section = ?'); vals.push(body.section); }
         if (body.type !== undefined) { sets.push('type = ?'); vals.push(body.type); }
         if (body.submitterName !== undefined) { sets.push('submitter_name = ?'); vals.push(body.submitterName); }
+        if (body.rawEventJson !== undefined || body.raw_event_json !== undefined) {
+          sets.push('raw_event_json = ?');
+          vals.push(stringifyJsonColumn(body.rawEventJson !== undefined ? body.rawEventJson : body.raw_event_json));
+        }
+        if (body.insightJson !== undefined || body.insight_json !== undefined) {
+          sets.push('insight_json = ?');
+          vals.push(stringifyJsonColumn(body.insightJson !== undefined ? body.insightJson : body.insight_json));
+        }
         if (sets.length === 0) return json({ ok: true });
         vals.push(feedbackId);
         await env.FEEDBACK_DB.prepare(

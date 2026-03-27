@@ -144,6 +144,7 @@ const LEGACY_CUSTOMER_PROFILE_MIGRATIONS = {
 
 const FEATURE_FLAGS = [
   { id: 'anchors-nav',      label: 'Anchors navigation',      desc: 'Navigate between sections by scrolling instead of tabs', triState: { off: 'Off', me: 'Me', everyone: 'Everyone' } },
+  { id: 'future-data-toggle', label: 'Future data control', desc: 'Show the future-data highlight icon in the ProtoGuide controls row' },
 ];
 
 function getFeatureFlagValue(id) {
@@ -180,6 +181,10 @@ function canUseOnboardingTransition() {
   return hasHelionAccess() && isFeatureEnabled('onboarding-transition');
 }
 
+function canUseFutureDataHighlightControl() {
+  return isFeatureEnabled('future-data-toggle');
+}
+
 function readFutureDataHighlightsEnabled() {
   try {
     return localStorage.getItem(FUTURE_DATA_HIGHLIGHTS_KEY) === 'true';
@@ -193,10 +198,24 @@ function syncFutureDataHighlightBodyFlag() {
 }
 
 function setFutureDataHighlightsEnabled(enabled) {
-  state.dataUI.futureHighlightsEnabled = Boolean(enabled);
+  state.dataUI.futureHighlightsEnabled = canUseFutureDataHighlightControl() && Boolean(enabled);
   try {
-    localStorage.setItem(FUTURE_DATA_HIGHLIGHTS_KEY, state.dataUI.futureHighlightsEnabled ? 'true' : 'false');
+    if (state.dataUI.futureHighlightsEnabled) {
+      localStorage.setItem(FUTURE_DATA_HIGHLIGHTS_KEY, 'true');
+    } else {
+      localStorage.removeItem(FUTURE_DATA_HIGHLIGHTS_KEY);
+    }
   } catch {}
+  syncFutureDataHighlightBodyFlag();
+}
+
+function syncFutureDataHighlightFeatureGate() {
+  if (!canUseFutureDataHighlightControl() && state.dataUI.futureHighlightsEnabled) {
+    state.dataUI.futureHighlightsEnabled = false;
+    try {
+      localStorage.removeItem(FUTURE_DATA_HIGHLIGHTS_KEY);
+    } catch {}
+  }
   syncFutureDataHighlightBodyFlag();
 }
 
@@ -246,7 +265,7 @@ function resetHelionAccess() {
 window.canUseOnboardingTransition = canUseOnboardingTransition;
 
 state.dataUI.futureHighlightsEnabled = readFutureDataHighlightsEnabled();
-syncFutureDataHighlightBodyFlag();
+syncFutureDataHighlightFeatureGate();
 
 // Restore unlock state on page load
 if (localStorage.getItem(HELION_UNLOCKED_KEY)) showHelionAvatar();
@@ -5957,6 +5976,7 @@ window._prototypeGuideAPI = {
       },
       anchorsNavUser: localStorage.getItem(ANCHORS_NAV_USER_KEY) === 'true',
       futureDataHighlights: Boolean(state.dataUI.futureHighlightsEnabled),
+      futureDataControlVisible: canUseFutureDataHighlightControl(),
     };
   },
   getAdminData: function () {
@@ -6005,6 +6025,11 @@ window._prototypeGuideAPI = {
     if (id === 'anchors-nav') {
       var userToggle = localStorage.getItem(ANCHORS_NAV_USER_KEY) === 'true';
       applyNavMode((value !== 'off' || userToggle) ? 'anchors' : 'tabs');
+      return;
+    }
+    if (id === 'future-data-toggle') {
+      syncFutureDataHighlightFeatureGate();
+      [...state.loadedSections].forEach((sectionId) => remountSection(sectionId));
     }
   },
   setAnchorsNavUser: function (checked) {

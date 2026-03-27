@@ -20,6 +20,7 @@ ProtoGuide lives in `protoguide/` and calls `window._prototypeGuideAPI` directly
 - `/architecture` — loads ARCHITECTURE.md snapshot for design questions (auto-invocable)
 - `/update-docs [filename]` — enforced read-first-then-rewrite procedure for maintaining docs (user-invoked)
 - `/self-review` — lightweight pre-commit check for prototypes (user-invoked)
+- `/design` — enforces Trengo design system tokens and component patterns before any UI work (auto-invocable)
 
 ## Deployment
 

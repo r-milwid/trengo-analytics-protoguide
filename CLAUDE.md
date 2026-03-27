@@ -24,6 +24,10 @@ Clickable HTML/CSS/JS prototype of Trengo's AI-native analytics system with an e
 - `synthetic-data/base-analytics.js` — Mock data generator
 - `mock-customers/` — 6 test customer profiles
 
+## Design System (MANDATORY)
+
+Before creating or modifying ANY UI component, style, layout, or frontend code, you MUST run /design first. No exceptions. Do not write UI code without running this skill.
+
 ## Prototype Rules
 
 - Speed and functionality first — don't over-engineer

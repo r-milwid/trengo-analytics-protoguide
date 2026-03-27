@@ -116,6 +116,7 @@ const AdminAssistant = (() => {
   let _role = null;           // 'admin' | 'supervisor' | 'agent'
   let _loopRunning = false;
   let _pendingResolve = null; // for blocking UI tools (show_options, show_source_input, etc)
+  let _pendingInteractionMeta = null;
   let _queuedUserMessage = null;
   let _startingOnboarding = false;
   let _runGeneration = 0;
@@ -133,12 +134,12 @@ const AdminAssistant = (() => {
   }
 
   function summarizeDelta(before, after) {
-    const b = typeof before === 'string' ? before
+    const b = (typeof before === 'string' ? before
       : Array.isArray(before) ? before.map(x => x?.label || x?.name || x).join(', ')
-      : JSON.stringify(before);
-    const a = typeof after === 'string' ? after
+      : JSON.stringify(before)) ?? '(none)';
+    const a = (typeof after === 'string' ? after
       : Array.isArray(after) ? after.map(x => x?.label || x?.name || x).join(', ')
-      : JSON.stringify(after);
+      : JSON.stringify(after)) ?? '(none)';
     if (b === a) return `unchanged: "${b}"`;
     return `AI suggested "${truncateStr(b, 120)}" → user chose "${truncateStr(a, 120)}"`;
   }
@@ -186,42 +187,274 @@ const AdminAssistant = (() => {
     return 'During onboarding';
   }
 
-  async function storeCorrection({ correctionType, step, aiSuggested, userChose, description }) {
-    // Severity gating: compare correction severity against correctionSensitivity threshold
+  function pruneIssueContext(value, options = {}, depth = 0) {
+    const settings = {
+      maxString: options.maxString ?? 320,
+      maxArray: options.maxArray ?? 8,
+      maxKeys: options.maxKeys ?? 10,
+      maxDepth: options.maxDepth ?? 3,
+    };
+    if (value == null) return value;
+    if (typeof value === 'string') return truncateStr(value, settings.maxString);
+    if (typeof value === 'number' || typeof value === 'boolean') return value;
+    if (depth >= settings.maxDepth) {
+      if (Array.isArray(value)) {
+        return value.slice(0, settings.maxArray).map(item => (
+          typeof item === 'string' ? truncateStr(item, settings.maxString) : '[complex]'
+        ));
+      }
+      try {
+        return truncateStr(JSON.stringify(value), settings.maxString);
+      } catch (_) {
+        return '[unserializable]';
+      }
+    }
+    if (Array.isArray(value)) {
+      return value.slice(0, settings.maxArray).map(item => pruneIssueContext(item, settings, depth + 1));
+    }
+    if (typeof value === 'object') {
+      const compact = {};
+      Object.keys(value).slice(0, settings.maxKeys).forEach((key) => {
+        compact[key] = pruneIssueContext(value[key], settings, depth + 1);
+      });
+      return compact;
+    }
+    return truncateStr(String(value), settings.maxString);
+  }
+
+  function getFeedbackSectionLabel() {
+    const mode = AssistantStorage.getMode(_session) || 'onboarding';
+    return mode === 'assistant' ? 'AI admin assistant' : 'AI onboarding assistant';
+  }
+
+  function inferIssueKind({ issueKind, step, correctionType }) {
+    if (issueKind) return issueKind;
+    if (step === 'chat_interrupt_ui') return 'interaction_interruption';
+    if (step === 'onboarding_skip' || step === 'onboarding_navigate_away' || correctionType === 'quit') return 'abandonment';
+    return 'proposal_correction';
+  }
+
+  function getIssueSeverity(issueKind, correctionType) {
+    if (correctionType && CORRECTION_SEVERITY[correctionType] != null) {
+      return CORRECTION_SEVERITY[correctionType];
+    }
+    const issueSeverity = {
+      proposal_correction: 5,
+      interaction_interruption: 6,
+      dissatisfaction: 8,
+      abandonment: 9,
+    };
+    return issueSeverity[issueKind] ?? 5;
+  }
+
+  function getRelevantThresholdKeys(step, issueKind) {
+    if (issueKind === 'abandonment' || issueKind === 'dissatisfaction') {
+      return [
+        'confidenceSkipSourceGathering',
+        'confidenceSkipTeamConfirmation',
+        'confidenceSkipDecisionGoals',
+        'confidenceSkipSignalFollowup',
+        'confidenceAutoDraft',
+        'confidenceSkipDensity',
+        'correctionSensitivity',
+      ];
+    }
+    if (step.startsWith('team_')) {
+      return ['confidenceSkipTeamConfirmation', 'confidenceAutoDraft', 'correctionSensitivity'];
+    }
+    if (step.startsWith('tab_')) {
+      return ['confidenceAutoDraft', 'confidenceSkipDensity', 'correctionSensitivity'];
+    }
+    if (step.startsWith('show_options')) {
+      return ['confidenceSkipDecisionGoals', 'correctionSensitivity'];
+    }
+    if (issueKind === 'interaction_interruption') {
+      return ['correctionSensitivity'];
+    }
+    return ['correctionSensitivity'];
+  }
+
+  function getThresholdSnapshot(step, issueKind) {
+    const thresholds = window._confidenceThresholds || {};
+    return {
+      all: {
+        confidenceSkipSourceGathering: thresholds.confidenceSkipSourceGathering ?? 5,
+        confidenceSkipTeamConfirmation: thresholds.confidenceSkipTeamConfirmation ?? 5,
+        confidenceSkipDecisionGoals: thresholds.confidenceSkipDecisionGoals ?? 6,
+        confidenceSkipSignalFollowup: thresholds.confidenceSkipSignalFollowup ?? 7,
+        confidenceAutoDraft: thresholds.confidenceAutoDraft ?? 7,
+        confidenceSkipDensity: thresholds.confidenceSkipDensity ?? 8,
+        correctionSensitivity: thresholds.correctionSensitivity ?? 5,
+      },
+      relatedKeys: getRelevantThresholdKeys(step, issueKind),
+    };
+  }
+
+  function getCurrentDisplayTurns(limit = 8) {
+    if (!_session) return [];
+    const mode = AssistantStorage.getMode(_session) || 'onboarding';
+    const messages = AssistantStorage.getMessages(_session) || [];
+    const startIndex = mode === 'assistant'
+      ? (AssistantStorage.getAssistantDisplayStartIndex(_session) ?? 0)
+      : 0;
+    const turns = [];
+
+    messages.slice(startIndex).forEach((msg) => {
+      if (!msg || (msg.role !== 'assistant' && msg.role !== 'user')) return;
+      if (typeof msg.content === 'string') {
+        turns.push({ role: msg.role, text: truncateStr(msg.content, 600) });
+        return;
+      }
+      if (!Array.isArray(msg.content)) return;
+      const text = msg.content
+        .filter(block => block && block.type === 'text' && block.text)
+        .map(block => block.text)
+        .join('\n\n')
+        .trim();
+      if (text) turns.push({ role: msg.role, text: truncateStr(text, 600) });
+    });
+
+    return turns.slice(-limit);
+  }
+
+  function getLatestToolSnapshot() {
+    if (!_session) return null;
+    const messages = AssistantStorage.getMessages(_session) || [];
+    let latestToolUse = null;
+    let latestToolResult = null;
+
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msg = messages[i];
+      if (!msg || !Array.isArray(msg.content)) continue;
+      if (!latestToolUse && msg.role === 'assistant') {
+        const toolUses = msg.content.filter(block => block && block.type === 'tool_use');
+        if (toolUses.length) {
+          latestToolUse = toolUses.map(block => ({
+            name: block.name,
+            input: pruneIssueContext(block.input, { maxString: 220, maxArray: 6, maxKeys: 8, maxDepth: 2 }),
+          })).slice(0, 3);
+        }
+      }
+      if (!latestToolResult && msg.role === 'user') {
+        const toolResults = msg.content.filter(block => block && block.type === 'tool_result');
+        if (toolResults.length) {
+          latestToolResult = toolResults.map(block => ({
+            toolUseId: block.tool_use_id,
+            content: truncateStr(typeof block.content === 'string' ? block.content : JSON.stringify(block.content), 220),
+          })).slice(0, 3);
+        }
+      }
+      if (latestToolUse && latestToolResult) break;
+    }
+
+    if (!latestToolUse && !latestToolResult) return null;
+    return {
+      latestToolUse,
+      latestToolResult,
+    };
+  }
+
+  function buildPendingInteractionSnapshot() {
+    if (!_pendingResolve || !_pendingInteractionMeta) return null;
+    return pruneIssueContext(_pendingInteractionMeta, { maxString: 240, maxArray: 8, maxKeys: 10, maxDepth: 2 });
+  }
+
+  function setPendingInteractionMeta(toolName, details = {}) {
+    _pendingInteractionMeta = {
+      toolName,
+      presentedAt: new Date().toISOString(),
+      ...pruneIssueContext(details, { maxString: 240, maxArray: 8, maxKeys: 10, maxDepth: 2 }),
+    };
+  }
+
+  function getRelevantStateSnapshot(step, issueKind) {
+    const structured = _session?.structured || {};
+    return {
+      thresholds: getThresholdSnapshot(step, issueKind),
+      sourceStatus: pruneIssueContext(structured.sourceStatus || null, { maxString: 120, maxArray: 6, maxKeys: 8, maxDepth: 2 }),
+      analyzedSources: pruneIssueContext(
+        (structured.analyzedSources || []).map((source) => ({
+          title: source.title || source.filename || source.url || 'Source',
+          summary: source.summary || null,
+          source: source.source || null,
+        })),
+        { maxString: 220, maxArray: 4, maxKeys: 4, maxDepth: 2 }
+      ),
+      confirmedFacts: pruneIssueContext(structured.confirmedFacts || {}, { maxString: 220, maxArray: 8, maxKeys: 10, maxDepth: 2 }),
+      teamAssignments: pruneIssueContext(structured.teamAssignments || {}, { maxString: 120, maxArray: 8, maxKeys: 10, maxDepth: 2 }),
+      goals: pruneIssueContext(structured.collectedGoals || [], { maxString: 180, maxArray: 6, maxKeys: 6, maxDepth: 2 }),
+      pendingProposalSource: structured.pendingProposalSource || null,
+      suggestedConfigDraft: pruneIssueContext(structured.suggestedConfigDraft || null, { maxString: 220, maxArray: 8, maxKeys: 10, maxDepth: 3 }),
+      pendingTabDraft: pruneIssueContext(structured.pendingTabDraft || null, { maxString: 220, maxArray: 8, maxKeys: 10, maxDepth: 3 }),
+      currentTabs: pruneIssueContext((state.tabs || []).map(tab => ({
+        id: tab.id,
+        label: tab.label,
+        category: tab.category || null,
+        categories: Array.isArray(tab.categories) ? tab.categories : null,
+      })), { maxString: 160, maxArray: 10, maxKeys: 6, maxDepth: 2 }),
+      currentTeams: pruneIssueContext((state.teams || []).map(team => ({
+        name: team.name,
+        usecase: team.usecase || null,
+      })), { maxString: 160, maxArray: 10, maxKeys: 4, maxDepth: 2 }),
+      mode: AssistantStorage.getMode(_session) || 'onboarding',
+      decisionArea: correctionContext(step),
+    };
+  }
+
+  function buildIssueRawEvent({ issueKind, correctionType, step, aiSuggested, userChose, description }) {
+    const recentTurns = getCurrentDisplayTurns();
+    const lastAssistantTurn = [...recentTurns].reverse().find(turn => turn.role === 'assistant') || null;
+    const lastUserTurn = [...recentTurns].reverse().find(turn => turn.role === 'user') || null;
+    return {
+      eventVersion: 2,
+      issueKind,
+      correctionType: correctionType || null,
+      step,
+      summary: description || summarizeDelta(aiSuggested, userChose),
+      phase: AssistantStorage.getMode(_session) || 'onboarding',
+      customerId: _customerId || null,
+      role: _role || null,
+      eventAt: new Date().toISOString(),
+      delta: {
+        summary: summarizeDelta(aiSuggested, userChose),
+        aiSuggested: pruneIssueContext(aiSuggested, { maxString: 220, maxArray: 10, maxKeys: 10, maxDepth: 3 }),
+        userChose: pruneIssueContext(userChose, { maxString: 220, maxArray: 10, maxKeys: 10, maxDepth: 3 }),
+        beforeState: pruneIssueContext(aiSuggested, { maxString: 220, maxArray: 10, maxKeys: 10, maxDepth: 3 }),
+        afterState: pruneIssueContext(userChose, { maxString: 220, maxArray: 10, maxKeys: 10, maxDepth: 3 }),
+      },
+      threadContext: {
+        recentTurns,
+        lastAssistantTurn,
+        lastUserTurn,
+        latestToolActivity: getLatestToolSnapshot(),
+      },
+      pendingInteraction: buildPendingInteractionSnapshot(),
+      relevantState: getRelevantStateSnapshot(step, issueKind),
+    };
+  }
+
+  async function storeAIIssue({ issueKind, correctionType, step, aiSuggested, userChose, description, keepalive = false, deferUntilQualified = false }) {
+    const normalizedIssueKind = inferIssueKind({ issueKind, step, correctionType });
     const sensitivity = (window._confidenceThresholds || {}).correctionSensitivity ?? 5;
-    const severity = CORRECTION_SEVERITY[correctionType] ?? 5;
+    const severity = getIssueSeverity(normalizedIssueKind, correctionType);
     if (severity < sensitivity) return null; // below threshold — don't log
 
-    // Produce structured JSON text for consistent organizer dedup
-    const formatVal = (v) => {
-      if (v == null) return null;
-      if (typeof v === 'string') return v;
-      if (Array.isArray(v)) return v.map(x => x?.label || x?.name || x).join(', ');
-      return JSON.stringify(v);
-    };
-
-    const structuredText = JSON.stringify({
-      type: correctionType,
+    const rawEvent = buildIssueRawEvent({
+      issueKind: normalizedIssueKind,
+      correctionType,
       step,
-      what: correctionWhat(step),
-      aiSuggested: formatVal(aiSuggested),
-      userChose: formatVal(userChose),
-      context: correctionContext(step),
+      aiSuggested,
+      userChose,
+      description,
     });
 
     const feedbackObj = {
-      text: structuredText,
-      section: 'AI onboarding assistant',
+      text: description || summarizeDelta(aiSuggested, userChose),
+      section: getFeedbackSectionLabel(),
       type: 'correction',
-      metadata: {
-        correctionType,
-        step,
-        aiSuggested: aiSuggested ?? null,
-        userChose: userChose ?? null,
-        customerId: _customerId || null,
-        role: _role || null,
-        timestamp: new Date().toISOString(),
-      },
+      rawEvent,
+      deferUntilQualified,
+      keepalive,
     };
     try {
       if (typeof window.storeFeedback === 'function') {
@@ -232,6 +465,35 @@ const AdminAssistant = (() => {
       console.warn('[AdminAssistant] Failed to store correction:', e);
       return null;
     }
+  }
+
+  async function storeCorrection({ issueKind, correctionType, step, aiSuggested, userChose, description, keepalive = false, deferUntilQualified = false }) {
+    return storeAIIssue({
+      issueKind,
+      correctionType,
+      step,
+      aiSuggested,
+      userChose,
+      description,
+      keepalive,
+      deferUntilQualified,
+    });
+  }
+
+  function maybeStoreDissatisfactionSignal(userText) {
+    if (!_session || !userText) return;
+    const turns = getCurrentDisplayTurns(6);
+    const hasAssistantTurn = turns.some(turn => turn.role === 'assistant');
+    if (!hasAssistantTurn) return;
+    void storeAIIssue({
+      issueKind: 'dissatisfaction',
+      correctionType: null,
+      step: 'user_message_dissatisfaction_candidate',
+      aiSuggested: turns.filter(turn => turn.role === 'assistant').slice(-1)[0]?.text || null,
+      userChose: userText,
+      description: `Candidate dissatisfaction signal in user reply: "${truncateStr(userText, 120)}"`,
+      deferUntilQualified: true,
+    });
   }
 
   // ── Tool definitions for Anthropic API ─────────────────────
@@ -1593,6 +1855,13 @@ ${role === 'agent'
     // This is a "blocking" UI tool — we render the options and pause the loop
     return new Promise(resolve => {
       _pendingResolve = resolve;
+      setPendingInteractionMeta('show_options', {
+        prompt,
+        optionLabels: Array.isArray(options) ? options.map(option => option.label) : [],
+        multiSelect: Boolean(multiSelect),
+        style: style || 'cards',
+        allowOther: Boolean(allowOther),
+      });
       void renderOptionsUI(prompt, options, multiSelect || false, style || 'cards', allowOther || false, resolve);
     });
   }
@@ -1600,6 +1869,10 @@ ${role === 'agent'
   function handleShowBooleanChoice({ prompt, yesLabel, noLabel }) {
     return new Promise(resolve => {
       _pendingResolve = resolve;
+      setPendingInteractionMeta('show_boolean_choice', {
+        prompt,
+        optionLabels: [yesLabel || 'Yes', noLabel || 'No'],
+      });
       void renderBooleanChoiceUI(prompt, yesLabel || 'Yes', noLabel || 'No', resolve);
     });
   }
@@ -1607,6 +1880,10 @@ ${role === 'agent'
   function handleShowTeamAssignmentMatrix({ prompt, teams }) {
     return new Promise(resolve => {
       _pendingResolve = resolve;
+      setPendingInteractionMeta('show_team_assignment_matrix', {
+        prompt,
+        teams: teams?.length ? teams : getKnownTeamNames(),
+      });
       void renderTeamAssignmentMatrixUI(prompt, teams?.length ? teams : getKnownTeamNames(), resolve);
     });
   }
@@ -1614,6 +1891,10 @@ ${role === 'agent'
   function handleShowTabEditor({ prompt, tabs }) {
     return new Promise(resolve => {
       _pendingResolve = resolve;
+      setPendingInteractionMeta('show_tab_editor', {
+        prompt,
+        tabs: tabs?.length ? tabs : getCurrentTabDraft(),
+      });
       void renderTabEditorUI(prompt, tabs?.length ? tabs : getCurrentTabDraft(), resolve);
     });
   }
@@ -1621,6 +1902,10 @@ ${role === 'agent'
   function handleShowTabProposalChoice({ prompt, tabs }) {
     return new Promise(resolve => {
       _pendingResolve = resolve;
+      setPendingInteractionMeta('show_tab_proposal_choice', {
+        prompt,
+        tabs: tabs || [],
+      });
       void renderTabProposalChoiceUI(prompt, tabs || [], resolve);
     });
   }
@@ -1634,6 +1919,10 @@ ${role === 'agent'
       AssistantStorage.setSourceStatus(_session, { requested: true });
       AssistantStorage.save(_session);
       _pendingResolve = resolve;
+      setPendingInteractionMeta('show_source_input', {
+        prompt,
+        allowedTypes: types,
+      });
       void renderSourceInputUI(prompt, types, resolve);
     });
   }
@@ -2224,6 +2513,7 @@ ${role === 'agent'
     AssistantStorage.appendMessage(_session, 'user', userText);
     renderUserBubble(userText);
     clearInput();
+    maybeStoreDissatisfactionSignal(userText);
 
     try {
       const mode = AssistantStorage.getMode(_session) || 'onboarding';
@@ -3449,7 +3739,7 @@ ${role === 'agent'
     skipBtn.textContent = 'Skip for now';
     skipBtn.addEventListener('click', () => {
       storeCorrection({ correctionType: 'skip', step: 'team_assignment_skip',
-        aiSuggested: draft.map(t => `${t.name}: ${t.usecase || 'unset'}`), userChose: null,
+        aiSuggested: draft.map(t => `${t.name}: ${t.usecase || 'unset'}`), userChose: 'skipped',
         description: 'User skipped team assignment step entirely' });
       wrapper.classList.add('ai-setup-options-resolved');
       disableOptions(wrapper);
@@ -3566,7 +3856,7 @@ ${role === 'agent'
         }
 
         storeCorrection({ correctionType: 'override', step: 'tab_proposal_refine',
-          aiSuggested: proposalTabs.map(t => t.label), userChose: null,
+          aiSuggested: proposalTabs.map(t => t.label), userChose: 'refine in editor',
           description: 'User chose to refine AI tab proposal instead of accepting it' });
         disableOptions(wrapper);
         renderTabEditorUI('Refine the proposed tabs directly.', proposalTabs, (result) => {
@@ -3819,7 +4109,7 @@ ${role === 'agent'
       const removedTabs = _origOrder.filter(id => !draft.some(t => t.id === id));
       if (removedTabs.length) {
         storeCorrection({ correctionType: 'reject', step: 'tab_editor_remove',
-          aiSuggested: removedTabs.map(id => _origLabels.get(id) || id), userChose: null,
+          aiSuggested: removedTabs.map(id => _origLabels.get(id) || id), userChose: 'removed',
           description: `Removed ${removedTabs.length} tab(s): ${removedTabs.map(id => _origLabels.get(id)).join(', ')}` });
       }
       // Added tabs
@@ -3844,7 +4134,7 @@ ${role === 'agent'
     skipBtn.textContent = 'Discard draft';
     skipBtn.addEventListener('click', () => {
       storeCorrection({ correctionType: 'reject', step: 'tab_editor_discard',
-        aiSuggested: draft.map(t => t.label), userChose: null,
+        aiSuggested: draft.map(t => t.label), userChose: 'discarded draft',
         description: 'User discarded tab editor draft mid-edit' });
       AssistantStorage.setPendingTabDraft(_session, null);
       AssistantStorage.setPendingProposalSource(_session, previousProposalSource);
@@ -5582,8 +5872,12 @@ ${role === 'agent'
     const text = getInputValue();
     if (!text) return;
     if (_pendingResolve) {
-      storeCorrection({ correctionType: 'override', step: 'chat_interrupt_ui',
-        aiSuggested: '(interactive UI presented)', userChose: text,
+      storeCorrection({ issueKind: 'interaction_interruption', correctionType: 'override', step: 'chat_interrupt_ui',
+        aiSuggested: _pendingInteractionMeta ? {
+          toolName: _pendingInteractionMeta.toolName,
+          prompt: _pendingInteractionMeta.prompt || null,
+          optionLabels: _pendingInteractionMeta.optionLabels || null,
+        } : '(interactive UI presented)', userChose: text,
         description: `User typed "${truncateStr(text, 100)}" instead of using the presented UI` });
       _queuedUserMessage = text;
       clearInput();
@@ -5604,7 +5898,7 @@ ${role === 'agent'
       const hasAiResponse = msgs.some(m => m.role === 'assistant');
       const msgCount = msgs.filter(m => typeof m.content === 'string').length;
       if (hasAiResponse && msgCount >= 2) {
-        storeCorrection({ correctionType: 'quit', step: 'onboarding_skip',
+        storeCorrection({ issueKind: 'abandonment', correctionType: 'quit', step: 'onboarding_skip',
           aiSuggested: 'continued onboarding', userChose: 'skipped',
           description: `User skipped onboarding after ${msgCount} messages (${msgs.filter(m => m.role === 'assistant').length} AI responses)` });
       }
@@ -6358,23 +6652,15 @@ ${role === 'agent'
       if (currentMode !== 'onboarding') return;
       const msgs = AssistantStorage.getMessages(_session) || [];
       if (!msgs.some(m => m.role === 'assistant')) return;
-      const feedbackObj = {
-        text: 'User navigated away during onboarding after receiving AI responses',
-        section: 'AI onboarding assistant',
-        type: 'correction',
-        metadata: {
-          correctionType: 'quit',
-          step: 'onboarding_navigate_away',
-          aiSuggested: 'continued onboarding',
-          userChose: 'left page',
-          customerId: _customerId || null,
-          role: _role || null,
-          timestamp: new Date().toISOString(),
-        },
-      };
-      if (typeof window.storeFeedback === 'function') {
-        window.storeFeedback(feedbackObj);
-      }
+      void storeCorrection({
+        issueKind: 'abandonment',
+        correctionType: 'quit',
+        step: 'onboarding_navigate_away',
+        aiSuggested: 'continued onboarding',
+        userChose: 'left page',
+        description: 'User navigated away during onboarding after receiving AI responses',
+        keepalive: true,
+      });
     });
 
     if (mode === 'assistant') {

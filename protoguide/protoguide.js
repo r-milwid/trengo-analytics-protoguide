@@ -782,25 +782,49 @@ All data in the prototype is randomly generated on each page load. KPI values, c
 
   async function storeFeedback(feedbackObj) {
     try {
-      const resp = await fetch(CHATBOT_PROXY + '/protoguide/feedback', {
+      var payload = {
+        text: feedbackObj.text,
+        section: feedbackObj.section || 'General',
+        type: feedbackObj.type || 'product',
+        submitterName: feedbackObj.name || sessionUserName || undefined,
+        rawEvent: feedbackObj.rawEvent || feedbackObj.rawEventJson || undefined,
+        deferUntilQualified: Boolean(feedbackObj.deferUntilQualified)
+      };
+      if (feedbackObj.keepalive) {
+        if (navigator.sendBeacon) {
+          var beaconBody = JSON.stringify(payload);
+          navigator.sendBeacon(CHATBOT_PROXY + '/protoguide/feedback', beaconBody);
+          return null;
+        }
+        var keepaliveResp = await fetch(CHATBOT_PROXY + '/protoguide/feedback', {
+          method: 'POST',
+          keepalive: true,
+          headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+          body: JSON.stringify(payload)
+        });
+        if (keepaliveResp.ok) {
+          const keepaliveData = await keepaliveResp.json();
+          return keepaliveData.id || null;
+        }
+        return null;
+      }
+      const requestOptions = {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({
-          text: feedbackObj.text,
-          section: feedbackObj.section || 'General',
-          type: feedbackObj.type || 'product',
-          submitterName: feedbackObj.name || sessionUserName || undefined
-        })
-      });
+        body: JSON.stringify(payload)
+      };
+      const resp = await authFetch(CHATBOT_PROXY + '/protoguide/feedback', requestOptions);
       if (resp.ok) {
         const data = await resp.json();
-        return data.id;
+        return data.id || null;
       }
     } catch (e) {
       console.error('Failed to store feedback:', e);
     }
     return null;
   }
+
+  window.storeFeedback = storeFeedback;
 
   async function updateFeedback(feedbackId, updates) {
     if (!feedbackId) return;
@@ -1403,6 +1427,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     var settingsRowEl = document.getElementById('ai-panel-settings-row');
     var api = window._prototypeGuideAPI;
     var settingsData = api ? api.getSettingsData() : {};
+    var showFutureDataControl = Boolean(settingsData.futureDataControlVisible);
 
     // Viewer: hide entire settings row (same as original SideCar guest role)
     if (!currentUser || !hasMinRole(currentUser.role, 'admin')) {
@@ -1416,9 +1441,9 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     // Admin: show insights + settings icons
     if (settingsRowEl) settingsRowEl.style.display = '';
     if (insightsBtn) insightsBtn.style.display = '';
-    if (futureDataBtn) futureDataBtn.style.display = '';
+    if (futureDataBtn) futureDataBtn.style.display = showFutureDataControl ? '' : 'none';
     if (settingsBtn) settingsBtn.style.display = '';
-    syncFutureDataButton(Boolean(settingsData.futureDataHighlights));
+    syncFutureDataButton(showFutureDataControl && Boolean(settingsData.futureDataHighlights));
     if (chatInputActions) chatInputActions.style.display = '';
     if (userMenuBtn) userMenuBtn.style.display = 'none'; // user menu in settings overlay instead
     syncChatInputState(true);
@@ -2312,6 +2337,14 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     html += '<div class="guide-toggle-track' + (settingsData.anchorsNavUser ? ' active' : '') + '" id="settings-anchors-toggle" data-toggle-key="anchorsNavUser"></div>';
     html += '</div></div>';
 
+    html += '<div class="guide-setting-block"><div class="guide-toggle-wrapper">';
+    html += '<div>';
+    html += '<div class="guide-setting-header">Future data control</div>';
+    html += '<div class="guide-setting-subtext">Show the future-data highlight icon in the guide controls row</div>';
+    html += '</div>';
+    html += '<div class="guide-toggle-track' + (settingsData.futureDataControlVisible ? ' active' : '') + '" id="settings-future-data-control-toggle" data-flag-id="future-data-toggle"></div>';
+    html += '</div></div>';
+
     // Configure Thresholds button (opens modal)
     if (adminData) {
       html += '<div class="guide-popout-divider"></div>';
@@ -2357,6 +2390,13 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     if (anchorsToggle) anchorsToggle.addEventListener('click', function() {
       anchorsToggle.classList.toggle('active');
       postToPrototype({ type: 'guide:set-toggle', key: 'anchorsNavUser', checked: anchorsToggle.classList.contains('active') });
+    });
+
+    var futureDataControlToggle = document.getElementById('settings-future-data-control-toggle');
+    if (futureDataControlToggle) futureDataControlToggle.addEventListener('click', function() {
+      futureDataControlToggle.classList.toggle('active');
+      postToPrototype({ type: 'guide:set-flag', flagId: 'future-data-toggle', value: futureDataControlToggle.classList.contains('active') });
+      updateSettingsRow();
     });
 
     // Wire configure thresholds button
@@ -2716,7 +2756,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
             html += feedbackBadges(raw);
             html += feedbackActions(eid, raw.type || 'product');
             html += '</div>';
-            html += formatFeedbackText(rawText);
+            html += formatFeedbackItem(raw);
             var name = raw.submitterName || raw.submitter_name;
             if (name) html += '<div class="feedback-item-submitter">' + escapeHtml(name) + '</div>';
             html += '</div>';
@@ -2809,6 +2849,59 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     }
   }
 
+  function renderCorrectionInsight(item, rawText) {
+    var insight = item && item.insightJson;
+    if (insight && typeof insight === 'object') {
+      var html = '';
+      if (insight.issue && insight.issue.summary) {
+        html += '<div class="feedback-item-summary">' + escapeHtml(insight.issue.summary) + '</div>';
+      } else if (rawText) {
+        html += '<div class="feedback-item-summary">' + escapeHtml(rawText) + '</div>';
+      }
+      if (insight.context && insight.context.summary) {
+        html += '<div class="feedback-item-detail">' + escapeHtml(insight.context.summary) + '</div>';
+      }
+      if (insight.possibleCorrection && insight.possibleCorrection.summary) {
+        html += '<div class="feedback-item-detail"><strong>Possible correction:</strong> ' + escapeHtml(insight.possibleCorrection.summary) + '</div>';
+      }
+      if (html) return html;
+    }
+
+    var rawEvent = item && item.rawEventJson;
+    if (rawEvent && typeof rawEvent === 'object') {
+      var fallbackHtml = '';
+      var fallbackSummary = rawEvent.summary || rawText || '';
+      if (fallbackSummary) {
+        fallbackHtml += '<div class="feedback-item-summary">' + escapeHtml(fallbackSummary) + '</div>';
+      }
+      var details = [];
+      if (rawEvent.pendingInteraction && rawEvent.pendingInteraction.prompt) {
+        details.push('Prompt: ' + rawEvent.pendingInteraction.prompt);
+      }
+      if (rawEvent.threadContext && rawEvent.threadContext.lastAssistantTurn && rawEvent.threadContext.lastAssistantTurn.text) {
+        details.push('Last assistant: ' + rawEvent.threadContext.lastAssistantTurn.text);
+      }
+      if (rawEvent.threadContext && rawEvent.threadContext.lastUserTurn && rawEvent.threadContext.lastUserTurn.text) {
+        details.push('Last user: ' + rawEvent.threadContext.lastUserTurn.text);
+      }
+      if (details.length) {
+        fallbackHtml += '<div class="feedback-item-detail">' + escapeHtml(details.join('  ')) + '</div>';
+      }
+      if (fallbackHtml) return fallbackHtml;
+    }
+
+    return null;
+  }
+
+  function formatFeedbackItem(item) {
+    var rawText = item && (item.text || item.rawText || item.raw_text || '');
+    if (item && item.type === 'correction') {
+      var correctionHtml = renderCorrectionInsight(item, rawText);
+      if (correctionHtml) return correctionHtml;
+    }
+    return formatFeedbackText(rawText);
+  }
+
   /** Build badge HTML for section and type */
   function feedbackBadges(item) {
     var html = '<div class="feedback-item-badges">';
@@ -2847,7 +2940,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       html += feedbackBadges(item);
       if (id) html += feedbackActions(id, type);
       html += '</div>';
-      html += formatFeedbackText(rawText);
+      html += formatFeedbackItem(item);
       var name = item.submitterName || item.submitter_name;
       if (name) html += '<div class="feedback-item-submitter">' + escapeHtml(name) + '</div>';
       html += '</div>';

@@ -787,6 +787,10 @@ body[data-panel="bar"] .ai-panel-inner {
   color: #40502f;
   border-color: rgba(145, 157, 111, 0.42);
 }
+.future-data-control-icon {
+  display: block;
+  overflow: visible;
+}
 
 /* ── Messages area ─────────────────────────────────────────── */
 .ai-panel-messages {

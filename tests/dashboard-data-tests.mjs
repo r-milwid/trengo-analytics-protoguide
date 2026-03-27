@@ -271,6 +271,10 @@ describe('Resolver Wiring', () => {
 });
 
 describe('ProtoGuide Future Highlight Toggle', () => {
+  test('future data control is gated behind a feature flag', () => {
+    assert.match(appJs, /id:\s*'future-data-toggle'/);
+  });
+
   test('guide panel includes the future data toggle button', () => {
     assert.match(protoguideHtml, /id="toggle-future-data-btn"/);
   });
@@ -283,12 +287,25 @@ describe('ProtoGuide Future Highlight Toggle', () => {
 
   test('prototype guide settings data exposes futureDataHighlights', () => {
     assert.match(appJs, /futureDataHighlights:\s*Boolean\(state\.dataUI\.futureHighlightsEnabled\)/);
+    assert.match(appJs, /futureDataControlVisible:\s*canUseFutureDataHighlightControl\(\)/);
   });
 
   test('prototype guide setToggle routes futureDataHighlights to the persisted UI toggle', () => {
     assert.match(appJs, /if \(key === 'futureDataHighlights'\)/);
     assert.match(appJs, /setFutureDataHighlightsEnabled\(checked\)/);
     assert.match(appJs, /remountSection/);
+  });
+
+  test('settings overlay includes a toggle to reveal the future data control', () => {
+    assert.match(protoguideJs, /settings-future-data-control-toggle/);
+    assert.match(protoguideJs, /future-data-toggle/);
+    assert.match(protoguideJs, /guide:set-flag/);
+  });
+
+  test('settings row only shows the future data button when the feature flag is enabled', () => {
+    const source = extractFunctionSource(protoguideJs, 'updateSettingsRow');
+    assert.match(source, /futureDataControlVisible/);
+    assert.match(source, /futureDataBtn\.style\.display = showFutureDataControl \? '' : 'none'/);
   });
 
   test('resetPrototypeStateToDefaults resets future data highlights to the default off state', () => {

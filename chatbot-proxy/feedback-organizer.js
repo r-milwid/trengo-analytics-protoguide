@@ -34,11 +34,17 @@ For "bugs" track:
 
 For "corrections" track:
 - These are AI assistant issues — the user deviated from what the AI suggested or configured, interrupted the flow, showed dissatisfaction, or abandoned the setup/assistant flow.
-- Submission text may be structured JSON. Prefer fields such as "issueKind", "issue", "context", "possibleCorrection", "step", and "phase" when present. Legacy submissions may instead include "type", "step", "what", "aiSuggested", "userChose", and "context".
+- Submission text may be structured JSON. Prefer fields such as "issueKind", "issue", "context", "step", and "phase" when present. Legacy submissions may instead include "type", "step", "what", "aiSuggested", "userChose", and "context".
 - DEDUPLICATION PRIORITY: Two corrections about the same decision area and trigger step are almost always the same concern, even across different users or sessions. Merge them aggressively.
 - Categories should reflect the AREA of the decision, not the correction type. Good: "Team setup", "Tab structure", "Content & metrics", "Dashboard scope". Bad: "Edits", "Overrides", "Rejections".
 - reportCount is especially important here — it shows how consistently the AI gets something wrong. High-count items are priorities for AI improvement.
-- Summaries should briefly mention the mechanism that might need optimising as the trigger event. All specific issue/context details are available in the source submissions.
+- Summaries must be scan-friendly labels, not mini-analyses. Write them like short issue titles, not sentences.
+- Target 3-7 words. Hard maximum 10 words.
+- Summaries should name only the issue pattern itself. Do NOT include detailed context, rationale, thresholds, example user inputs, suggested improvements, or explanatory clauses.
+- Avoid long sentence connectors like "because", "when", "before", "after", "without", or "indicating" unless absolutely required for basic meaning.
+- Prefer short labels like "Users bypass presented UI", "Priority options miss org structure", or "Refinement before setup confirmation".
+- Bad: "Assistant moved to refinement options without revisiting earlier setup context user needed"
+- Good: "Refinement before setup confirmation"
 - When merging, aggregate into a representative pattern. Do not list every AI→user pair.
 
 Output ONLY valid JSON matching this exact schema — no markdown, no explanation:
@@ -84,11 +90,17 @@ For "bugs" track:
 
 For "corrections" track:
 - These are AI assistant issues — the user deviated from what the AI suggested or configured, interrupted the flow, showed dissatisfaction, or abandoned the setup/assistant flow.
-- Submission text may be structured JSON. Prefer fields such as "issueKind", "issue", "context", "possibleCorrection", "step", and "phase" when present. Legacy submissions may instead include "type", "step", "what", "aiSuggested", "userChose", and "context".
+- Submission text may be structured JSON. Prefer fields such as "issueKind", "issue", "context", "step", and "phase" when present. Legacy submissions may instead include "type", "step", "what", "aiSuggested", "userChose", and "context".
 - DEDUPLICATION PRIORITY: Two corrections about the same decision area and trigger step are almost always the same concern. Merge aggressively.
 - Categories should reflect the AREA of the decision, not the correction type. Good: "Team setup", "Tab structure", "Content & metrics", "Dashboard scope". Bad: "Edits", "Overrides", "Rejections".
 - reportCount tracks frequency — high-count items are priorities for AI improvement.
-- Summaries should briefly mention the mechanism that might need optimising. All specific issue/context details are in the source submissions.
+- Summaries must be scan-friendly labels, not mini-analyses. Write them like short issue titles, not sentences.
+- Target 3-7 words. Hard maximum 10 words.
+- Summaries should name only the issue pattern itself. Do NOT include detailed context, rationale, thresholds, example user inputs, suggested improvements, or explanatory clauses.
+- Avoid long sentence connectors like "because", "when", "before", "after", "without", or "indicating" unless absolutely required for basic meaning.
+- Prefer short labels like "Users bypass presented UI", "Priority options miss org structure", or "Refinement before setup confirmation".
+- Bad: "Assistant moved to refinement options without revisiting earlier setup context user needed"
+- Good: "Refinement before setup confirmation"
 - When merging, aggregate into a representative pattern. Do not list every AI→user pair.
 
 Output ONLY valid JSON matching this exact schema — no markdown, no explanation:
@@ -256,7 +268,6 @@ function buildCorrectionOrganizerText(submission) {
       issueKind: normalizeIssueKind(insightJson?.issue?.kind || rawEventJson?.issueKind, 'proposal_correction'),
       issue: insightJson?.issue?.summary || rawText || null,
       context: insightJson?.context?.summary || null,
-      possibleCorrection: insightJson?.possibleCorrection?.summary || null,
       step: rawEventJson?.step || null,
       phase: rawEventJson?.phase || null,
     });

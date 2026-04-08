@@ -35,7 +35,7 @@
     return resp;
   }
 
-  // ── Embedded Context (from original sidecar_context.md, now embedded) ────────────
+  // ── Embedded Context (kept directly in this file) ────────────
   const CONTEXT_IDENTITY = `Your job is strictly limited to:
 - Answering questions about the Analytics structure shown in the prototype
 - Explaining the rationale behind the new reporting model
@@ -408,6 +408,62 @@ All data in the prototype is randomly generated on each page load. KPI values, c
   let sessionUserName = null;
   let pendingFeedback = null;
   const messages = []; // conversation history for API
+  const PROTOGUIDE_CHAT_TOOLS = [
+    {
+      name: 'show_choices',
+      description: 'Show interactive choice buttons when clicking is faster than typing.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string' },
+          options: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                label: { type: 'string' },
+                description: { type: 'string' }
+              },
+              required: ['id', 'label']
+            }
+          },
+          allow_other: { type: 'boolean' }
+        },
+        required: ['options']
+      }
+    },
+    {
+      name: 'submit_feedback',
+      description: 'Collect structured product feedback and ask the user to confirm it before saving.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string' },
+          confirm_label: { type: 'string' },
+          decline_label: { type: 'string' },
+          inferred_section: { type: 'string' },
+          inferred_text: { type: 'string' }
+        },
+        required: ['inferred_text']
+      }
+    },
+    {
+      name: 'report_bug',
+      description: 'Collect a bug report and ask the user to confirm it before saving.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string' },
+          confirm_label: { type: 'string' },
+          decline_label: { type: 'string' },
+          inferred_section: { type: 'string' },
+          inferred_text: { type: 'string' }
+        },
+        required: ['inferred_text']
+      }
+    }
+  ];
 
   // ── Action Log (weighted, for feedback/bug context) ──────────
   const actionLog = [];
@@ -854,25 +910,46 @@ All data in the prototype is randomly generated on each page load. KPI values, c
 
   // ── Tool Component Renderers ──────────────────────────────
 
+  function buildToolResultBlock(toolUseId, payload) {
+    if (!toolUseId) return null;
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUseId,
+      content: JSON.stringify(payload)
+    };
+  }
+
+  function getToolUseBlocks(fullResponse) {
+    if (!fullResponse || !Array.isArray(fullResponse.content)) return [];
+    return fullResponse.content.filter(function (block) {
+      return block && block.type === 'tool_use' && block.id;
+    });
+  }
+
+  function resolvePendingToolComponents() {
+    document.querySelectorAll('.chat-tool-component:not(.resolved)').forEach(function (container) {
+      container.classList.add('resolved');
+      container.querySelectorAll('button').forEach(function (btn) {
+        btn.disabled = true;
+      });
+    });
+  }
+
   /**
    * Router: dispatch to a specific renderer based on tool name.
    */
   function renderToolComponent(toolUse, fullResponse) {
-    if (!toolUse || !toolUse.name) return;
+    if (!toolUse || !toolUse.name) return false;
     switch (toolUse.name) {
       case 'show_choices':
-        renderShowChoices(toolUse, fullResponse);
-        break;
+        return renderShowChoices(toolUse, fullResponse);
       case 'submit_feedback':
-        renderFeedbackBug(toolUse, fullResponse, 'feedback');
-        break;
+        return renderFeedbackBug(toolUse, fullResponse, 'feedback');
       case 'report_bug':
-        renderFeedbackBug(toolUse, fullResponse, 'bug');
-        break;
+        return renderFeedbackBug(toolUse, fullResponse, 'bug');
       default:
-        // Unknown tool — silently ignore to avoid crashes
         console.warn('[ProtoGuide] Unknown tool_use name:', toolUse.name);
-        break;
+        return false;
     }
   }
 
@@ -881,15 +958,26 @@ All data in the prototype is randomly generated on each page load. KPI values, c
    */
   function renderShowChoices(toolUse, fullResponse) {
     const input = toolUse.input || {};
-    // Filter out any "Other" option the AI may have included — the code adds its own when allow_other is true
-    const rawOptions = Array.isArray(input.options) ? input.options : [];
-    const options = input.allow_other
-      ? rawOptions.filter(opt => {
-          if (!opt) return false;
-          const label = (opt.label || opt.id || '').toLowerCase().replace(/[.\u2026]+$/, '').trim();
-          return label !== 'other';
+    const allowOther = Boolean(input.allow_other || input.allowOther);
+    // Support both the current options/id schema and the older items/value variant.
+    const rawOptions = Array.isArray(input.options) ? input.options : (Array.isArray(input.items) ? input.items : []);
+    const normalizedOptions = rawOptions.map(function (opt) {
+      if (!opt) return null;
+      const label = String(opt.label || opt.id || opt.value || '').trim();
+      const id = String(opt.id || opt.value || label).trim();
+      if (!label || !id) return null;
+      return { id: id, label: label };
+    }).filter(Boolean);
+    const options = allowOther
+      ? normalizedOptions.filter(function (opt) {
+          const label = opt.label.toLowerCase().replace(/[.\u2026]+$/, '').trim();
+          return label !== 'other' && opt.id !== '__other__';
         })
-      : rawOptions;
+      : normalizedOptions;
+    if (options.length === 0 && !allowOther) {
+      console.warn('[ProtoGuide] show_choices received no actionable options:', input);
+      return false;
+    }
     const container = document.createElement('div');
     container.className = 'chat-tool-component';
 
@@ -922,7 +1010,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     });
 
     // "Other..." pill — resolves immediately and focuses main input
-    if (input.allow_other) {
+    if (allowOther) {
       const otherBtn = document.createElement('button');
       otherBtn.className = 'chat-pill';
       otherBtn.textContent = 'Other\u2026';
@@ -943,6 +1031,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     container.appendChild(pillsWrap);
     chatMessages.appendChild(container);
     chatMessages.scrollTop = chatMessages.scrollHeight;
+    return true;
   }
 
   /**
@@ -950,14 +1039,25 @@ All data in the prototype is randomly generated on each page load. KPI values, c
    */
   function renderFeedbackBug(toolUse, fullResponse, type) {
     const input = toolUse.input || {};
+    const inferredText = String(
+      input.inferred_text ||
+      input.text ||
+      (input.description && input.steps ? (input.description + '\nSteps: ' + input.steps) : (input.description || ''))
+    ).trim();
+    const inferredSection = input.inferred_section || input.section || null;
+    if (!inferredText) {
+      console.warn('[ProtoGuide] ' + toolUse.name + ' received no actionable text:', input);
+      return false;
+    }
     const container = document.createElement('div');
     container.className = 'chat-tool-component';
 
     // Prompt text
-    if (input.prompt) {
+    const promptText = input.prompt || inferredText;
+    if (promptText) {
       const promptEl = document.createElement('div');
       promptEl.className = 'chat-tool-prompt';
-      promptEl.textContent = input.prompt;
+      promptEl.textContent = promptText;
       container.appendChild(promptEl);
     }
 
@@ -981,8 +1081,8 @@ All data in the prototype is randomly generated on each page load. KPI values, c
         confirmed: true,
         actionLog: getRecentActions(),
         type: type,
-        inferred_section: input.inferred_section || null,
-        inferred_text: input.inferred_text || null
+        inferred_section: inferredSection,
+        inferred_text: inferredText
       });
     });
 
@@ -998,6 +1098,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     container.appendChild(actionsRow);
     chatMessages.appendChild(container);
     chatMessages.scrollTop = chatMessages.scrollHeight;
+    return true;
   }
 
   // ── Client-Side Agentic Loop ────────────────────────────────
@@ -1015,17 +1116,31 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       return;
     }
 
+    resolvePendingToolComponents();
+
     // Append the AI's full response to messages
     messages.push({ role: 'assistant', content: fullResponse.content });
 
-    // Append the tool result
+    const toolUseBlocks = getToolUseBlocks(fullResponse);
+    const toolResults = toolUseBlocks.map(function (block) {
+      if (block.id === toolUse.id) {
+        return buildToolResultBlock(block.id, result);
+      }
+      return buildToolResultBlock(block.id, {
+        skipped: true,
+        reason: 'Another ProtoGuide interaction in this response was selected instead.'
+      });
+    }).filter(Boolean);
+
+    if (toolResults.length === 0) {
+      const fallbackBlock = buildToolResultBlock(toolUse.id, result);
+      if (fallbackBlock) toolResults.push(fallbackBlock);
+    }
+
+    // Append the tool result(s)
     messages.push({
       role: 'user',
-      content: [{
-        type: 'tool_result',
-        tool_use_id: toolUse.id,
-        content: JSON.stringify(result)
-      }]
+      content: toolResults
     });
 
     // Store feedback/bug if confirmed
@@ -1061,16 +1176,10 @@ All data in the prototype is randomly generated on each page load. KPI values, c
         getRecentActions().length ? 'RECENT USER ACTIONS:\n' + getRecentActions().map(a => '- [' + a.type + '] ' + (a.detail || '')).join('\n') : ''
       ].filter(Boolean).join('\n\n');
 
-      const tools = [
-        { name: 'show_choices', description: 'Show interactive choice buttons', input_schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, value: { type: 'string' } }, required: ['label', 'value'] } } }, required: ['items'] } },
-        { name: 'submit_feedback', description: 'Collect structured feedback', input_schema: { type: 'object', properties: { section: { type: 'string' }, sentiment: { type: 'string' }, text: { type: 'string' } }, required: ['text'] } },
-        { name: 'report_bug', description: 'Collect a bug report', input_schema: { type: 'object', properties: { description: { type: 'string' }, steps: { type: 'string' } }, required: ['description'] } }
-      ];
-
       const resp = await fetch(CHATBOT_PROXY + '/onboarding/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system, messages, tools })
+        body: JSON.stringify({ system, messages, tools: PROTOGUIDE_CHAT_TOOLS })
       });
 
       removeTyping();
@@ -1100,7 +1209,8 @@ All data in the prototype is randomly generated on each page load. KPI values, c
 
     // New format: content is an array of blocks
     if (Array.isArray(content)) {
-      let hasToolUse = false;
+      let hasRenderableToolUse = false;
+      let hasAnyToolUse = false;
 
       function renderBlock(block) {
         if (!block) return;
@@ -1125,17 +1235,22 @@ All data in the prototype is randomly generated on each page load. KPI values, c
             });
           }
         } else if (block.type === 'tool_use') {
-          hasToolUse = true;
-          renderToolComponent(block, data);
+          hasAnyToolUse = true;
+          if (renderToolComponent(block, data)) {
+            hasRenderableToolUse = true;
+          }
         }
       }
 
       content.forEach(renderBlock);
 
-      // If no tool_use blocks, this is a final response — reset loop depth
-      if (!hasToolUse) {
+      if (hasAnyToolUse && !hasRenderableToolUse) {
+        addErrorBubble('ProtoGuide received an interaction it could not render. Please try asking that a different way.');
+      }
+
+      // If there is no renderable tool_use, this is effectively a final response.
+      if (!hasRenderableToolUse) {
         _agenticLoopDepth = 0;
-        // Store the assistant message for text-only responses
         const textParts = content.filter(function (b) { return b && b.type === 'text' && b.text; });
         if (textParts.length > 0) {
           const combinedText = textParts.map(function (b) { return parseSentinels(b.text).cleanText; }).filter(Boolean).join('\n');
@@ -1144,7 +1259,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
           }
         }
       }
-      // If there are tool_use blocks, don't push to messages yet —
+      // If there are renderable tool_use blocks, don't push to messages yet —
       // handleToolResult will push the full response content when the user interacts
       return;
     }
@@ -1230,16 +1345,10 @@ All data in the prototype is randomly generated on each page load. KPI values, c
         getRecentActions().length ? 'RECENT USER ACTIONS:\n' + getRecentActions().map(a => '- [' + a.type + '] ' + (a.detail || '')).join('\n') : ''
       ].filter(Boolean).join('\n\n');
 
-      const tools = [
-        { name: 'show_choices', description: 'Show interactive choice buttons', input_schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, value: { type: 'string' } }, required: ['label', 'value'] } } }, required: ['items'] } },
-        { name: 'submit_feedback', description: 'Collect structured feedback', input_schema: { type: 'object', properties: { section: { type: 'string' }, sentiment: { type: 'string' }, text: { type: 'string' } }, required: ['text'] } },
-        { name: 'report_bug', description: 'Collect a bug report', input_schema: { type: 'object', properties: { description: { type: 'string' }, steps: { type: 'string' } }, required: ['description'] } }
-      ];
-
       const resp = await fetch(CHATBOT_PROXY + '/onboarding/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system, messages, tools })
+        body: JSON.stringify({ system, messages, tools: PROTOGUIDE_CHAT_TOOLS })
       });
 
       removeTyping();
@@ -1325,16 +1434,10 @@ All data in the prototype is randomly generated on each page load. KPI values, c
         getRecentActions().length ? 'RECENT USER ACTIONS:\n' + getRecentActions().map(a => '- [' + a.type + '] ' + (a.detail || '')).join('\n') : ''
       ].filter(Boolean).join('\n\n');
 
-      const tools = [
-        { name: 'show_choices', description: 'Show interactive choice buttons', input_schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, value: { type: 'string' } }, required: ['label', 'value'] } } }, required: ['items'] } },
-        { name: 'submit_feedback', description: 'Collect structured feedback', input_schema: { type: 'object', properties: { section: { type: 'string' }, sentiment: { type: 'string' }, text: { type: 'string' } }, required: ['text'] } },
-        { name: 'report_bug', description: 'Collect a bug report', input_schema: { type: 'object', properties: { description: { type: 'string' }, steps: { type: 'string' } }, required: ['description'] } }
-      ];
-
       const resp = await fetch(CHATBOT_PROXY + '/onboarding/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system, messages, tools })
+        body: JSON.stringify({ system, messages, tools: PROTOGUIDE_CHAT_TOOLS })
       });
 
       removeTyping();
@@ -1429,7 +1532,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
     var settingsData = api ? api.getSettingsData() : {};
     var showFutureDataControl = Boolean(settingsData.futureDataControlVisible);
 
-    // Viewer: hide entire settings row (same as original SideCar guest role)
+    // Viewer: hide the settings row and keep the main chat controls visible
     if (!currentUser || !hasMinRole(currentUser.role, 'admin')) {
       if (settingsRowEl) settingsRowEl.style.display = 'none';
       if (chatInputActions) chatInputActions.style.display = '';
@@ -2561,7 +2664,7 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       html += '<div class="manage-section" style="margin-top:20px;">';
       html += '<h4 class="mu-section-title">Users</h4>';
 
-      // Add user form (matching SideCar style)
+      // Add user form
       html += '<div class="mu-add-form">';
       html += '<input type="email" id="mu-add-email" class="mu-input" placeholder="user@example.com">';
       html += '<select id="mu-add-role" class="mu-input mu-role-select"><option value="viewer">Viewer</option><option value="admin">Admin</option></select>';

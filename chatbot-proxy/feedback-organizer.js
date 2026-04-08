@@ -1,9 +1,8 @@
 /**
  * AI Feedback Organizer — merges duplicates, generates summaries, syncs to Linear.
- * Ported from SideCar's organizer system.
  */
 
-// ── Prompts (from SideCar shared/organizer-prompts.js) ──────────────
+// ── Organizer prompts ──────────────
 
 const ORGANIZER_SYSTEM_PROMPT = `You are a feedback organizer. You maintain a structured summary document for a product prototype's feedback.
 

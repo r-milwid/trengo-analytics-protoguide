@@ -46,6 +46,15 @@ function stringifyJsonColumn(value) {
   return value == null ? null : JSON.stringify(value);
 }
 
+function safeParseJson(value, fallback = null) {
+  if (typeof value !== 'string' || !value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return fallback;
+  }
+}
+
 async function readJsonBody(request) {
   const text = await request.text();
   return text ? JSON.parse(text) : {};
@@ -398,22 +407,33 @@ export default {
             if (typeof msg.content === 'string') {
               openaiMessages.push({ role: msg.role, content: msg.content });
             } else if (Array.isArray(msg.content)) {
-              // Handle tool_result blocks and text blocks
               const parts = [];
+              const toolCalls = [];
               const toolResults = [];
               for (const block of msg.content) {
-                if (block.type === 'text') parts.push(block.text);
+                if (block.type === 'text' && block.text) parts.push(block.text);
                 else if (block.type === 'tool_use') {
-                  // Assistant tool call — handled separately
-                  openaiMessages.push({ role: 'assistant', content: parts.length ? parts.join('\n') : null,
-                    tool_calls: [{ id: block.id, type: 'function', function: { name: block.name, arguments: JSON.stringify(block.input) } }] });
-                  parts.length = 0;
-                  continue;
+                  toolCalls.push({
+                    id: block.id,
+                    type: 'function',
+                    function: {
+                      name: block.name,
+                      arguments: JSON.stringify(block.input || {})
+                    }
+                  });
                 } else if (block.type === 'tool_result') {
                   toolResults.push({ role: 'tool', tool_call_id: block.tool_use_id, content: typeof block.content === 'string' ? block.content : JSON.stringify(block.content) });
                 }
               }
-              if (parts.length > 0) openaiMessages.push({ role: msg.role, content: parts.join('\n') });
+              if (toolCalls.length > 0) {
+                openaiMessages.push({
+                  role: 'assistant',
+                  content: parts.length ? parts.join('\n') : null,
+                  tool_calls: toolCalls
+                });
+              } else if (parts.length > 0) {
+                openaiMessages.push({ role: msg.role, content: parts.join('\n') });
+              }
               toolResults.forEach(tr => openaiMessages.push(tr));
             }
           }
@@ -433,6 +453,7 @@ export default {
           const openaiBody = { model: 'gpt-4.1', messages: openaiMessages, max_tokens: 4096 };
           if (openaiTools) {
             openaiBody.tools = openaiTools;
+            openaiBody.parallel_tool_calls = false;
             // Encourage tool use on the first turn so interactive components appear.
             if (isFirstTurn) openaiBody.tool_choice = 'required';
           }
@@ -448,12 +469,21 @@ export default {
             // Normalise OpenAI response → Anthropic format for frontend compatibility
             const choice = openaiData.choices?.[0];
             const contentBlocks = [];
-            if (choice?.message?.content) contentBlocks.push({ type: 'text', text: choice.message.content });
+            const messageContent = choice?.message?.content;
+            if (typeof messageContent === 'string' && messageContent) {
+              contentBlocks.push({ type: 'text', text: messageContent });
+            } else if (Array.isArray(messageContent)) {
+              const text = messageContent.map((part) => {
+                if (typeof part === 'string') return part;
+                return part?.text || '';
+              }).filter(Boolean).join('\n');
+              if (text) contentBlocks.push({ type: 'text', text });
+            }
             if (choice?.message?.tool_calls) {
               for (const tc of choice.message.tool_calls) {
                 contentBlocks.push({
                   type: 'tool_use', id: tc.id, name: tc.function.name,
-                  input: JSON.parse(tc.function.arguments || '{}'),
+                  input: safeParseJson(tc.function.arguments, {}),
                 });
               }
             }

@@ -33,3 +33,6 @@ ProtoGuide lives in `protoguide/` and calls `window._prototypeGuideAPI` directly
 
 - **Feedback is soft-deleted** — the Worker DELETE endpoint sets `deleted: true` + `deletedAt` on the entry rather than removing it from the array. Frontend filters on `s.deleted` at display time. Feedback data is never permanently removed.
 - **Feedback text field** — stored as `text` in KV. Frontend reads `item.text || item.rawText || item.raw_text` for backward compatibility.
+- **ProtoGuide chat tool payloads** — `show_choices` uses `options` with `id`/`label`, and the frontend normalizes the older `items`/`value` shape for backward compatibility so choice prompts never render as an empty trailing sentence.
+- **ProtoGuide tool-turn integrity** — every assistant `tool_use` in a ProtoGuide response must be matched by a `tool_result` on the next client turn. Extra or unrenderable tools are skipped explicitly, and unsupported tool names surface a visible fallback instead of leaving the chat hanging.
+- **ProtoGuide naming** — ProtoGuide is directly embedded in the analytics prototype. Do not use legacy iframe-app naming in code, comments, tests, or docs.

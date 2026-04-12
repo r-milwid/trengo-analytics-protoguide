@@ -10,6 +10,33 @@ if (typeof window.sendEvent !== 'function') {
   window.sendEvent = function () { /* no-op: ProtoGuide doesn't use iframe messaging */ };
 }
 
+// ── Shared onboarding scroll lock ───────────────────────────
+const guideOnboardingLocks = new Set();
+
+function applyGuideOnboardingLockState() {
+  const isActive = guideOnboardingLocks.size > 0;
+  document.documentElement.classList.toggle('onboarding-active', isActive);
+  document.body.classList.toggle('onboarding-active', isActive);
+
+  const analyticsPage = document.getElementById('analytics-page');
+  if (analyticsPage) analyticsPage.classList.toggle('onboarding-active', isActive);
+}
+
+window.setGuideOnboardingState = function (sourceOrActive, maybeActive) {
+  const source = typeof sourceOrActive === 'string' && sourceOrActive
+    ? sourceOrActive
+    : 'assistant';
+  const isActive = typeof sourceOrActive === 'string'
+    ? !!maybeActive
+    : !!sourceOrActive;
+
+  if (isActive) guideOnboardingLocks.add(source);
+  else guideOnboardingLocks.delete(source);
+
+  applyGuideOnboardingLockState();
+  return guideOnboardingLocks.size > 0;
+};
+
 // ── STATE ──────────────────────────────────────────────────────
 const state = {
   currentView: 'landing', // 'landing' | 'analytics'

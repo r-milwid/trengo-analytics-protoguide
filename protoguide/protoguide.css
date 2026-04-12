@@ -49,6 +49,11 @@ body { margin: 0; font-family: var(--font); background: var(--bg); overflow: hid
   overflow: auto;
 }
 
+body.onboarding-active .guide-main {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 .guide-main::after {
   content: '';
   position: absolute;

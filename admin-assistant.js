@@ -6715,7 +6715,7 @@ ${role === 'agent'
     const overlay = document.getElementById('ai-setup-overlay');
     if (overlay) overlay.style.display = '';
     if (window.setGuideOnboardingState) {
-      window.setGuideOnboardingState(true);
+      window.setGuideOnboardingState('assistant', true);
     }
     // Keep the settings cog visible/hoverable, but lock clicks during onboarding
     const settingsNav = document.getElementById('settings-nav');
@@ -6728,6 +6728,9 @@ ${role === 'agent'
     if (window.clearMetaStartAutoScroll) window.clearMetaStartAutoScroll();
     const overlay = document.getElementById('ai-setup-overlay');
     if (overlay) overlay.style.display = 'none';
+    if (window.setGuideOnboardingState) {
+      window.setGuideOnboardingState('assistant', false);
+    }
     // Re-enable settings cog clicks after onboarding
     const settingsNav = document.getElementById('settings-nav');
     if (settingsNav) {
@@ -6866,7 +6869,7 @@ ${role === 'agent'
     if (shouldRestart) {
       showOnboarding();
     } else if (window.setGuideOnboardingState) {
-      window.setGuideOnboardingState(false);
+      window.setGuideOnboardingState('assistant', false);
     }
   }
 
@@ -6907,7 +6910,7 @@ ${role === 'agent'
       return true;
     } finally {
       if (window.setGuideOnboardingState) {
-        window.setGuideOnboardingState(false);
+        window.setGuideOnboardingState('assistant', false);
       }
       hideOnboarding();
       _robotPreviewRunning = false;

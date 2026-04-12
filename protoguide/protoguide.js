@@ -3317,6 +3317,9 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       setTimeout(() => {
         overlay.style.display = 'none';
         overlay.classList.remove('closing');
+        if (window.setGuideOnboardingState) {
+          window.setGuideOnboardingState('walkthrough', false);
+        }
         stepsContainer.innerHTML = '';
         onboardingBodyText = null;
         onboardingSkipBtn = null;
@@ -3391,6 +3394,9 @@ All data in the prototype is randomly generated on each page load. KPI values, c
       onboardingStep = 0;
       overlay.classList.remove('closing');
       overlay.style.display = 'block';
+      if (window.setGuideOnboardingState) {
+        window.setGuideOnboardingState('walkthrough', true);
+      }
       showStep(0, { animate: false });
     }
 
